@@ -8,6 +8,7 @@ pub mod platform;
 pub mod registry;
 pub mod remote;
 pub mod shell;
+pub mod source;
 pub mod store;
 
 pub use error::{IkkError, Result};

@@ -45,12 +45,12 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
             name,
             pkg: &pkg,
             config: &ctx.config,
-            security: &ctx.config.security,
             platform: &ctx.platform,
             home: &ctx.home,
         };
 
-        ops::install(&req, &ctx.registry, &ctx.store, &mut ctx.lock, &ctx.http).await?;
+        let source = ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
+        ops::install(&req, &*source, &ctx.store, &mut ctx.lock).await?;
 
         let after = ctx.lock.get(name).map(|l| l.version.clone());
 
