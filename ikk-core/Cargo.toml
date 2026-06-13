@@ -19,7 +19,7 @@ url         = { workspace = true }
 async-trait = { workspace = true }
 flate2      = "1"
 tar         = "0.4"
-zip         = "2"
+zip         = "8"
 xz2         = "0.1"
 
 [features]
