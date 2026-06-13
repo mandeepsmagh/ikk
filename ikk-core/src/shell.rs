@@ -51,8 +51,12 @@ impl Shell {
             Shell::Fish => Some(dirs::config_dir()?.join("fish").join("config.fish")),
             Shell::Nushell => Some(dirs::config_dir()?.join("nushell").join("config.nu")),
             Shell::PowerShell => {
-                // $PROFILE equivalent — Documents\PowerShell\profile.ps1
-                Some(home.join("Documents").join("PowerShell").join("profile.ps1"))
+                // PowerShell 7+ default profile path
+                Some(
+                    home.join("Documents")
+                        .join("PowerShell")
+                        .join("Microsoft.PowerShell_profile.ps1"),
+                )
             }
             Shell::Unknown(_) => None,
         }

@@ -10,6 +10,7 @@ pub enum ArchiveKind {
     Raw,
     AppImage,
     Dmg,
+    Msi,
 }
 
 impl ArchiveKind {
@@ -29,6 +30,9 @@ impl ArchiveKind {
         }
         if f.ends_with(".dmg") {
             return Self::Dmg;
+        }
+        if f.ends_with(".msi") {
+            return Self::Msi;
         }
         Self::Raw
     }
@@ -68,6 +72,13 @@ pub fn extract(
         ArchiveKind::Zip => extract_zip(bytes, binary_name, stage_dir),
         ArchiveKind::Raw | ArchiveKind::AppImage => {
             let out = stage_dir.join(binary_name);
+            // on Windows, raw binaries need .exe extension to be executable
+            #[cfg(target_os = "windows")]
+            let out = if asset_name.ends_with(".exe") && !binary_name.ends_with(".exe") {
+                stage_dir.join(format!("{binary_name}.exe"))
+            } else {
+                out
+            };
             std::fs::write(&out, bytes)?;
             set_executable(&out)?;
             Ok(out)
@@ -78,6 +89,7 @@ pub fn extract(
             #[cfg(not(target_os = "macos"))]
             Err(IkkError::Store(".dmg is only supported on macOS".into()))
         }
+        ArchiveKind::Msi => Err(IkkError::Store(".msi extraction is not yet supported".into())),
     }
 }
 
