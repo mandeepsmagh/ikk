@@ -80,7 +80,7 @@ pub fn install_path_integration(shell: &Shell, bin_dir: &Path) -> Result<bool> {
     }
 
     let existing = std::fs::read_to_string(&rc).unwrap_or_default();
-    let marker   = "# ikk";
+    let marker   = "# ikk begin";
 
     // already present — idempotent
     if existing.contains(marker) {
@@ -88,7 +88,7 @@ pub fn install_path_integration(shell: &Shell, bin_dir: &Path) -> Result<bool> {
     }
 
     let line   = shell.path_export(bin_dir);
-    let append = format!("\n{marker}\n{line}\n");
+    let append = format!("\n# ikk begin\n{line}\n# ikk end\n");
 
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -108,15 +108,16 @@ pub fn remove_path_integration(shell: &Shell) -> Result<bool> {
     if !rc.exists() { return Ok(false); }
 
     let content = std::fs::read_to_string(&rc)?;
-    if !content.contains("# ikk") { return Ok(false); }
+    if !content.contains("# ikk begin") { return Ok(false); }
 
-    // remove lines between # ikk markers
+    // remove the block between paired markers
     let cleaned: String = content
         .lines()
-        .fold((String::new(), false), |(mut acc, mut skip), line| {
-            if line.trim() == "# ikk" {
-                skip = !skip;
-                (acc, skip)
+        .fold((String::new(), false), |(mut acc, skip), line| {
+            if line.trim() == "# ikk begin" {
+                (acc, true)
+            } else if line.trim() == "# ikk end" {
+                (acc, false)
             } else if !skip {
                 acc.push_str(line);
                 acc.push('\n');

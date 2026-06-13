@@ -43,25 +43,33 @@ impl Store {
         self.root.join(Self::entry_dir_name(name, version, binary_hash))
     }
 
-    /// Find an installed package by name — returns the first match.
-    pub fn find(&self, name: &str) -> Option<StorePath> {
-        let prefix = format!("-{}-", name);
-        std::fs::read_dir(&self.root).ok()?
+    /// Find installed packages matching a name — returns newest version first.
+    pub fn find_all(&self, name: &str) -> Vec<StorePath> {
+        let prefix = format!("-{name}-");
+        let mut results: Vec<StorePath> = std::fs::read_dir(&self.root)
+            .into_iter()
+            .flatten()
             .filter_map(|e| e.ok())
-            .find(|e| e.file_name().to_string_lossy().contains(&prefix))
-            .map(|e| {
-                let path   = e.path();
-                let fname  = e.file_name().to_string_lossy().to_string();
-                let hash   = fname.split('-').next().unwrap_or("").to_string();
-                let binary = path.join("bin").join(name);
-                StorePath {
-                    hash,
-                    name:    name.to_string(),
-                    version: String::new(), // filled from meta if needed
-                    path,
-                    binary,
-                }
+            .filter(|e| e.file_name().to_string_lossy().contains(&prefix))
+            .filter_map(|e| {
+                let path    = e.path();
+                let fname   = e.file_name().to_string_lossy().to_string();
+                let hash    = fname.split('-').next().unwrap_or("").to_string();
+                let binary  = path.join("bin").join(name);
+
+                let version = std::fs::read_to_string(path.join("meta.toml"))
+                    .ok()
+                    .and_then(|s| toml::from_str::<StoreMeta>(&s).ok())
+                    .map(|m| m.version)
+                    .unwrap_or_default();
+
+                Some(StorePath { hash, name: name.to_string(), version, path, binary })
             })
+            .collect();
+
+        // sort by directory name for deterministic ordering
+        results.sort_by(|a, b| a.path.cmp(&b.path));
+        results
     }
 
     /// Insert a verified binary. Idempotent — skips if already present.
