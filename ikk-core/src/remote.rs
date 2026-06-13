@@ -32,15 +32,16 @@ pub trait Remote: Send + Sync {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConfig {
-    pub host:              String,
-    pub releases_url:      String,   // template: {host} {owner} {repo} {version}
-    pub version_path:      String,   // dot-notation JSON path
-    pub prerelease_path:   String,
-    pub draft_path:        String,
-    pub assets_path:       String,   // path to assets array
-    pub asset_url_path:    String,   // path within each asset object
-    pub asset_name_path:   String,
-    pub auth_env:          Option<String>,
+    pub host:                  String,
+    pub releases_url:          String,   // template for latest release
+    pub releases_version_url:  Option<String>, // template for specific version (e.g. /releases/tags/{version})
+    pub version_path:          String,   // dot-notation JSON path
+    pub prerelease_path:       String,
+    pub draft_path:            String,
+    pub assets_path:           String,   // path to assets array
+    pub asset_url_path:        String,   // path within each asset object
+    pub asset_name_path:       String,
+    pub auth_env:              Option<String>,
 }
 
 // ── one implementation that works for every remote ──────────────────────────
@@ -162,8 +163,14 @@ impl Remote for ConfiguredRemote {
     }
 
     async fn assets(&self, version: &str) -> Result<Vec<Asset>> {
-        // version with and without v-prefix — try both
-        let url = self.build_url(Some(version));
+        let url = match &self.config.releases_version_url {
+            Some(template) => template
+                .replace("{host}",    &self.config.host)
+                .replace("{owner}",   &self.owner)
+                .replace("{repo}",    &self.repo)
+                .replace("{version}", version),
+            None => self.build_url(Some(version)),
+        };
         tracing::debug!("fetching assets for {version} from {url}");
 
         let resp = self.client.get(&url).send().await?;

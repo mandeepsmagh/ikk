@@ -148,12 +148,18 @@ fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
     let dmg_path = stage_dir.join("download.dmg");
     std::fs::write(&dmg_path, bytes)?;
 
+    // ensure dmg is removed on all exit paths
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+    let _cleanup = Cleanup(dmg_path.clone());
+
     let out = Command::new("hdiutil")
         .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
         .output()?;
 
     if !out.status.success() {
-        return Err(IkkError::Store("hdiutil attach failed".into()));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(IkkError::Store(format!("hdiutil attach failed: {stderr}")));
     }
 
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -164,7 +170,19 @@ fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
 
     let found = find_binary_in_dir(Path::new(&mount), binary_name);
 
-    let _ = Command::new("hdiutil").args(["detach", &mount, "-quiet"]).output();
+    let detach = Command::new("hdiutil")
+        .args(["detach", &mount, "-quiet"])
+        .output();
+
+    match detach {
+        Ok(o) if !o.status.success() => {
+            tracing::warn!("hdiutil detach {} failed: {}", mount, String::from_utf8_lossy(&o.stderr));
+        }
+        Err(e) => {
+            tracing::warn!("hdiutil detach {} failed: {e}", mount);
+        }
+        _ => {}
+    }
 
     let src = found.ok_or_else(|| IkkError::Store(
         format!("binary '{binary_name}' not found in dmg")
