@@ -26,7 +26,8 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
         build: None,
     };
 
-    let source = ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
+    let source =
+        ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
 
     let latest = source.version("latest").await?;
     let current = env!("CARGO_PKG_VERSION");
