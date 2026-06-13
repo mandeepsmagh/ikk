@@ -229,7 +229,10 @@ ikk/
   gets its own tool versions without re-installing. Same content-addressed store, same
   lock file, just different symlink targets. Shell hook (`ikk hook zsh`) adds `.ikk/bin`
   to PATH before the global `~/.ikk/bin` — project versions win, no shims needed.
+- **Provenance verification** — cryptographic proof that a binary came from its declared
+  source (not just "same bits as last time"). Must work across all forges — GitHub, GitLab,
+  Codeberg, self-hosted. Research and implement once a forge-agnostic standard emerges.
+  No dependency on proprietary attestation services.
 - `ikk search` — search packages across configured forges
-- Sigstore / cosign verification layer
 - MSI extraction on Windows
 - `.deb` / `.rpm` extraction
