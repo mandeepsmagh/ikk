@@ -209,6 +209,7 @@ fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
     Ok(dst)
 }
 
+#[cfg(target_os = "macos")]
 fn find_binary_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
     for e in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
         let p = e.path();
