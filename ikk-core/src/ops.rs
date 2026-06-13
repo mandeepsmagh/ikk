@@ -27,7 +27,7 @@ pub async fn install(
     lock: &mut LockFile,
 ) -> Result<()> {
     let url = req.config.resolve_source(&req.pkg.source)?;
-    let version = source.version(&req.pkg.version).await?;
+    let version = source.version(&req.pkg.version, req.name).await?;
     let binary_name = req.pkg.binary.as_deref().unwrap_or(req.name);
 
     // already at this version — nothing to do
@@ -48,38 +48,16 @@ pub async fn install(
         )
         .await?;
 
-    let binary_hash = sha256_hex(&fetched.binary_bytes);
-
-    // remove old version from store if upgrading
-    if let Some(old) = lock.get(req.name) {
-        let _ = store.remove(req.name, &old.version, &old.store_hash);
-        remove_bin_link(&req.home.bin_dir().join(binary_name))?;
-    }
-
-    // insert into store
-    let store_path = store.insert(
+    commit(
         req.name,
         &version,
-        &fetched.binary_bytes,
-        &fetched.source_url,
-        &fetched.archive_hash,
+        binary_name,
+        url.as_ref(),
+        &fetched,
+        &req.home.bin_dir(),
+        store,
+        lock,
     )?;
-
-    // symlink into bin
-    create_bin_link(&store_path.binary, &req.home.bin_dir().join(binary_name))?;
-
-    // update lock
-    lock.insert(
-        req.name.to_string(),
-        LockedPackage {
-            version: version.clone(),
-            source_url: url.to_string(),
-            download_url: fetched.source_url,
-            archive_sha256: fetched.archive_hash,
-            binary_sha256: binary_hash,
-            store_hash: store_path.hash[..12].to_string(),
-        },
-    );
 
     tracing::info!("installed {}@{}", req.name, version);
     Ok(())
@@ -101,8 +79,54 @@ pub fn make_source(
         Ok(Box::new(LocalSource::new(path, is_dir, pkg.build.clone())))
     } else {
         let remote = registry.remote_for(&url)?;
-        Ok(Box::new(RemoteSource::new(remote, http.clone(), security.clone())))
+        Ok(Box::new(RemoteSource::new(remote, std::sync::Arc::new(http.clone()), security.clone())))
     }
+}
+
+/// Shared tail: store insert → symlink → lock update.
+/// Called by both `install()` and `sync()`'s phase 3.
+#[allow(clippy::too_many_arguments)]
+fn commit(
+    name: &str,
+    version: &str,
+    binary_name: &str,
+    source_url: &str,
+    fetched: &crate::source::FetchedBinary,
+    home_bin: &Path,
+    store: &Store,
+    lock: &mut LockFile,
+) -> Result<()> {
+    let binary_hash = sha256_hex(&fetched.binary_bytes);
+
+    // remove old version from store if upgrading
+    if let Some(old) = lock.get(name) {
+        let _ = store.remove(name, &old.version, &old.store_hash);
+        remove_bin_link(&home_bin.join(binary_name))?;
+    }
+
+    let store_path = store.insert(
+        name,
+        version,
+        &fetched.binary_bytes,
+        &fetched.source_url,
+        &fetched.archive_hash,
+    )?;
+
+    create_bin_link(&store_path.binary, &home_bin.join(binary_name))?;
+
+    lock.insert(
+        name.to_string(),
+        LockedPackage {
+            version: version.to_string(),
+            source_url: source_url.to_string(),
+            download_url: fetched.source_url.clone(),
+            archive_sha256: fetched.archive_hash.clone(),
+            binary_sha256: binary_hash,
+            store_hash: store_path.hash[..12].to_string(),
+        },
+    );
+
+    Ok(())
 }
 
 // ── remove ────────────────────────────────────────────────────────────────────
@@ -168,7 +192,7 @@ pub async fn sync(
             }
         };
 
-        let version = match source.version(&pkg.version).await {
+        let version = match source.version(&pkg.version, name).await {
             Ok(v) => v,
             Err(e) => {
                 report.failed.push((name.clone(), e.to_string()));
@@ -231,35 +255,17 @@ pub async fn sync(
 
             match fetch_result {
                 Ok(fetched) => {
-                    let binary_hash = sha256_hex(&fetched.binary_bytes);
-
-                    // remove old version
-                    if let Some(old) = lock.get(&name) {
-                        let _ = store.remove(&name, &old.version, &old.store_hash);
-                        let _ = remove_bin_link(&home_bin.join(&binary_name));
-                    }
-
-                    match store.insert(
+                    match commit(
                         &name,
                         &version,
-                        &fetched.binary_bytes,
-                        &fetched.source_url,
-                        &fetched.archive_hash,
+                        &binary_name,
+                        &source_url,
+                        &fetched,
+                        &home_bin,
+                        store,
+                        lock,
                     ) {
-                        Ok(store_path) => {
-                            let _ =
-                                create_bin_link(&store_path.binary, &home_bin.join(&binary_name));
-                            lock.insert(
-                                name.clone(),
-                                LockedPackage {
-                                    version: version.clone(),
-                                    source_url: source_url.clone(),
-                                    download_url: fetched.source_url,
-                                    archive_sha256: fetched.archive_hash,
-                                    binary_sha256: binary_hash,
-                                    store_hash: store_path.hash[..12].to_string(),
-                                },
-                            );
+                        Ok(()) => {
                             tracing::info!("installed {}@{}", name, version);
                             report.installed.push(name);
                             let _ = lock.save(lock_path);

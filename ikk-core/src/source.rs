@@ -21,7 +21,7 @@ pub struct FetchedBinary {
 #[async_trait]
 pub trait Source: Send + Sync {
     /// Resolve a version spec: pinned `"1.2.3"` → `"1.2.3"`, `"latest"` → concrete version.
-    async fn version(&self, spec: &str) -> Result<String>;
+    async fn version(&self, spec: &str, name: &str) -> Result<String>;
 
     /// Fetch the binary — download + extract (remote) or read + build (local).
     async fn fetch(
@@ -38,19 +38,23 @@ pub trait Source: Send + Sync {
 
 pub(crate) struct RemoteSource {
     remote: Box<dyn Remote>,
-    http: reqwest::Client,
+    http: std::sync::Arc<reqwest::Client>,
     security: SecurityConfig,
 }
 
 impl RemoteSource {
-    pub fn new(remote: Box<dyn Remote>, http: reqwest::Client, security: SecurityConfig) -> Self {
+    pub fn new(
+        remote: Box<dyn Remote>,
+        http: std::sync::Arc<reqwest::Client>,
+        security: SecurityConfig,
+    ) -> Self {
         Self { remote, http, security }
     }
 }
 
 #[async_trait]
 impl Source for RemoteSource {
-    async fn version(&self, spec: &str) -> Result<String> {
+    async fn version(&self, spec: &str, name: &str) -> Result<String> {
         if spec != "latest" {
             return Ok(spec.to_string());
         }
@@ -68,7 +72,7 @@ impl Source for RemoteSource {
                 .and_then(crate::config::days_since_iso8601)
                 .unwrap_or(0);
             return Err(IkkError::ReleaseTooRecent {
-                name: String::new(),
+                name: name.to_string(),
                 version: release.version,
                 age_days,
                 min_days: self.security.min_release_age_days,
@@ -121,7 +125,7 @@ impl LocalSource {
 
 #[async_trait]
 impl Source for LocalSource {
-    async fn version(&self, spec: &str) -> Result<String> {
+    async fn version(&self, spec: &str, _name: &str) -> Result<String> {
         if spec != "latest" {
             return Ok(spec.to_string());
         }
