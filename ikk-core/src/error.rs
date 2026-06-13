@@ -11,7 +11,9 @@ pub enum IkkError {
     #[error("no suitable asset found for platform {os}/{arch}")]
     NoAssetForPlatform { os: String, arch: String },
 
-    #[error("hash mismatch for {name}@{version}\n  expected: {expected}\n  got:      {actual}\n  This may indicate a supply chain attack. Do not proceed.")]
+    #[error(
+        "hash mismatch for {name}@{version}\n  expected: {expected}\n  got:      {actual}\n  This may indicate a supply chain attack. Do not proceed."
+    )]
     HashMismatch { name: String, version: String, expected: String, actual: String },
 
     #[error("package '{0}' not found in ikk.lock")]
@@ -26,7 +28,9 @@ pub enum IkkError {
     #[error("build failed for {name}: {reason}")]
     BuildFailed { name: String, reason: String },
 
-    #[error("release {version} of {name} is too recent ({age_days} days old, minimum {min_days})\n  Wait or pin a specific older version.")]
+    #[error(
+        "release {version} of {name} is too recent ({age_days} days old, minimum {min_days})\n  Wait or pin a specific older version."
+    )]
     ReleaseTooRecent { name: String, version: String, age_days: u64, min_days: u64 },
 
     #[error("store error: {0}")]

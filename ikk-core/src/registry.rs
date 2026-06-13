@@ -3,7 +3,7 @@ use url::Url;
 
 use crate::{
     error::{IkkError, Result},
-    remote::{owner_repo_from_url, ConfiguredRemote, Remote, RemoteConfig, RemoteRegistry},
+    remote::{ConfiguredRemote, Remote, RemoteConfig, RemoteRegistry, owner_repo_from_url},
 };
 
 const DEFAULT_REMOTES: &str = include_str!("remotes.toml");

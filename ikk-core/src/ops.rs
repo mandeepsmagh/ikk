@@ -7,7 +7,7 @@ use crate::{
     lock::{LockFile, LockedPackage},
     platform::Platform,
     source::{LocalSource, RemoteSource, Source},
-    store::{sha256_hex, Store},
+    store::{Store, sha256_hex},
 };
 
 // ── install ───────────────────────────────────────────────────────────────────
@@ -39,7 +39,13 @@ pub async fn install(
     }
 
     let fetched = source
-        .fetch(&version, binary_name, req.platform, req.pkg.binary.as_deref(), &req.home.stage_dir())
+        .fetch(
+            &version,
+            binary_name,
+            req.platform,
+            req.pkg.binary.as_deref(),
+            &req.home.stage_dir(),
+        )
         .await?;
 
     let binary_hash = sha256_hex(&fetched.binary_bytes);
@@ -108,8 +114,7 @@ pub fn remove(
     store: &Store,
     lock: &mut LockFile,
 ) -> Result<()> {
-    let locked =
-        lock.get(name).ok_or_else(|| IkkError::PackageNotFound(name.to_string()))?.clone();
+    let locked = lock.get(name).ok_or_else(|| IkkError::PackageNotFound(name.to_string()))?.clone();
 
     store.remove(name, &locked.version, &locked.store_hash)?;
     remove_bin_link(&home.bin_dir().join(binary_name))?;

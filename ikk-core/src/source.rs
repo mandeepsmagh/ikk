@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use async_trait::async_trait;
+use std::path::{Path, PathBuf};
 
 use crate::config::{BuildConfig, BuildSystem, SecurityConfig};
 use crate::error::{IkkError, Result};
@@ -58,9 +58,7 @@ impl Source for RemoteSource {
         let release = self.remote.latest().await?;
 
         if release.prerelease || release.draft {
-            return Err(IkkError::Store(
-                "latest release is a prerelease or draft".into(),
-            ));
+            return Err(IkkError::Store("latest release is a prerelease or draft".into()));
         }
 
         if !self.security.is_old_enough(release.published_at.as_deref()) {
@@ -181,10 +179,7 @@ fn build_local(dir: &Path, binary_name: &str, build: Option<&BuildConfig>) -> Re
         BuildSystem::Cmake => {
             std::fs::create_dir_all(dir.join("build"))?;
             Command::new("cmake").args([".."]).current_dir(dir.join("build")).status()?;
-            Command::new("cmake")
-                .args(["--build", "."])
-                .current_dir(dir.join("build"))
-                .status()?
+            Command::new("cmake").args(["--build", "."]).current_dir(dir.join("build")).status()?
         }
         BuildSystem::Script => {
             let script = build.script.as_deref().unwrap_or("./build.sh");

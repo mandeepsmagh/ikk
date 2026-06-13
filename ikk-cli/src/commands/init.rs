@@ -3,7 +3,7 @@ use clap::Args;
 use ikk_core::{
     config::Config,
     home::IkkHome,
-    shell::{install_path_integration, Shell},
+    shell::{Shell, install_path_integration},
 };
 
 #[derive(Args)]

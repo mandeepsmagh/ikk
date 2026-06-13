@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{IkkError, Result};
-use crate::platform::{score_asset, Platform};
+use crate::platform::{Platform, score_asset};
 
 pub enum ArchiveKind {
     TarGz,

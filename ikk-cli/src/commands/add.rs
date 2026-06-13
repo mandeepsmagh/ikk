@@ -43,7 +43,12 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
 
     // derive name from source if not provided
     let name = args.name.unwrap_or_else(|| {
-        args.source.split('/').next_back().unwrap_or(&args.source).trim_end_matches(".git").to_string()
+        args.source
+            .split('/')
+            .next_back()
+            .unwrap_or(&args.source)
+            .trim_end_matches(".git")
+            .to_string()
     });
 
     let build = args.build.map(|b| ikk_core::config::BuildConfig {
@@ -68,7 +73,8 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
         home: &ctx.home,
     };
 
-    let source = ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
+    let source =
+        ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
     ops::install(&req, &*source, &ctx.store, &mut ctx.lock).await?;
 
     // persist to config + lock
