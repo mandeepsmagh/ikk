@@ -64,12 +64,12 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
         name: &name,
         pkg: &pkg,
         config: &ctx.config,
-        security: &ctx.config.security,
         platform: &ctx.platform,
         home: &ctx.home,
     };
 
-    ops::install(&req, &ctx.registry, &ctx.store, &mut ctx.lock, &ctx.http).await?;
+    let source = ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
+    ops::install(&req, &*source, &ctx.store, &mut ctx.lock).await?;
 
     // persist to config + lock
     ctx.config.packages.insert(name, pkg);

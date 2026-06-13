@@ -37,7 +37,7 @@ pub struct Defaults {
 
 // ── security ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SecurityConfig {
     /// Minimum age in days before ikk will install a release.
     /// Protects against supply chain attacks where a release is
