@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod commands;
-use commands::{add, check, info, init, remove, sync, uninstall, upgrade};
+use commands::{add, check, info, init, remove, self_update, sync, uninstall, upgrade};
 
 #[derive(Parser)]
 #[command(
@@ -48,6 +48,9 @@ enum Command {
     /// Completely remove ikk from this machine (all packages, config, PATH entry)
     #[command(visible_alias = "rmrf")]
     Uninstall(uninstall::UninstallArgs),
+
+    /// Update ikk itself to the latest release
+    SelfUpdate(self_update::SelfUpdateArgs),
 }
 
 #[tokio::main]
@@ -76,5 +79,6 @@ async fn main() -> Result<()> {
         Command::Check => check::run(&home),
         Command::Info(args) => info::run(args, &home),
         Command::Uninstall(args) => uninstall::run(args, &home),
+        Command::SelfUpdate(args) => self_update::run(args, &home).await,
     }
 }
