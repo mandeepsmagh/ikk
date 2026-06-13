@@ -20,8 +20,12 @@ A minimal, secure, cross-platform package manager for pre-built binaries.
 ## Install
 
 ```bash
-# coming soon — for now, build from source
-git clone https://github.com/you/ikk
+curl -fsSL https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.sh | sh
+```
+
+Or build from source:
+```bash
+git clone https://github.com/mandeepsmagh/ikk
 cd ikk
 cargo build --release
 cp target/release/ikk ~/.local/bin/
