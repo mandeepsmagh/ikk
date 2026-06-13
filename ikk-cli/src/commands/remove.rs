@@ -1,7 +1,7 @@
-use clap::Args;
-use anyhow::Result;
-use ikk_core::{home::IkkHome, ops};
 use super::Ctx;
+use anyhow::Result;
+use clap::Args;
+use ikk_core::{home::IkkHome, ops};
 
 #[derive(Args)]
 pub struct RemoveArgs {
@@ -12,7 +12,10 @@ pub struct RemoveArgs {
 pub fn run(args: RemoveArgs, home: &IkkHome) -> Result<()> {
     let mut ctx = Ctx::load(home)?;
 
-    let binary = ctx.config.packages.get(&args.name)
+    let binary = ctx
+        .config
+        .packages
+        .get(&args.name)
         .and_then(|p| p.binary.clone())
         .unwrap_or_else(|| args.name.clone());
 

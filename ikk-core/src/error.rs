@@ -12,12 +12,7 @@ pub enum IkkError {
     NoAssetForPlatform { os: String, arch: String },
 
     #[error("hash mismatch for {name}@{version}\n  expected: {expected}\n  got:      {actual}\n  This may indicate a supply chain attack. Do not proceed.")]
-    HashMismatch {
-        name:     String,
-        version:  String,
-        expected: String,
-        actual:   String,
-    },
+    HashMismatch { name: String, version: String, expected: String, actual: String },
 
     #[error("package '{0}' not found in ikk.lock")]
     PackageNotFound(String),

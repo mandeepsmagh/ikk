@@ -1,14 +1,15 @@
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 
 mod commands;
-use commands::{init, add, remove, sync, upgrade, check, info, uninstall};
+use commands::{add, check, info, init, remove, sync, uninstall, upgrade};
 
 #[derive(Parser)]
 #[command(
     name    = "ikk",
     about   = "ਇੱਕ — one version, one truth, one command",
     version = env!("CARGO_PKG_VERSION"),
+    after_help = "EXAMPLES:\n  ikk init --remote github.com\n  ikk add BurntSushi/ripgrep\n  ikk add sharkdp/fd\n  ikk sync\n  ikk check\n  ikk upgrade\n  ikk info ripgrep\n  ikk remove fd\n  ikk uninstall --yes",
 )]
 struct Cli {
     /// Override ikk home directory (default: ~/.ikk)
@@ -21,28 +22,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Initialise ikk on this machine
+    /// Initialise ikk on this machine — creates ~/.ikk and adds to PATH
+    #[command(visible_alias = "setup")]
     Init(init::InitArgs),
 
-    /// Sync installed packages to match ikk.lock
+    /// Sync installed packages to match ikk.toml — install, upgrade, and remove as needed
     Sync,
 
-    /// Add a package
+    /// Add a package from a forge (owner/repo) or local path
+    #[command(visible_alias = "install")]
     Add(add::AddArgs),
 
-    /// Remove a package
+    /// Remove a package and its symlink
     Remove(remove::RemoveArgs),
 
-    /// Upgrade packages to latest versions
+    /// Upgrade packages to latest versions (skips pinned by default)
     Upgrade(upgrade::UpgradeArgs),
 
-    /// Verify all installed package hashes
+    /// Verify integrity — checks lock file merkle root and all binary hashes
     Check,
 
-    /// Show information about an installed package
+    /// Show details about an installed package
     Info(info::InfoArgs),
 
-    /// Completely remove ikk from this machine
+    /// Completely remove ikk from this machine (all packages, config, PATH entry)
+    #[command(visible_alias = "rmrf")]
     Uninstall(uninstall::UninstallArgs),
 }
 
@@ -50,8 +54,7 @@ enum Command {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("ikk=info".parse()?)
+            tracing_subscriber::EnvFilter::from_default_env().add_directive("ikk=info".parse()?),
         )
         .without_time()
         .with_target(false)
@@ -61,17 +64,17 @@ async fn main() -> Result<()> {
 
     let home = match cli.home {
         Some(p) => ikk_core::IkkHome::new(p),
-        None    => ikk_core::IkkHome::default(),
+        None => ikk_core::IkkHome::default(),
     };
 
     match cli.command {
-        Command::Init(args)      => init::run(args, &home).await,
-        Command::Sync            => sync::run(&home).await,
-        Command::Add(args)       => add::run(args, &home).await,
-        Command::Remove(args)    => remove::run(args, &home),
-        Command::Upgrade(args)   => upgrade::run(args, &home).await,
-        Command::Check           => check::run(&home),
-        Command::Info(args)      => info::run(args, &home),
+        Command::Init(args) => init::run(args, &home).await,
+        Command::Sync => sync::run(&home).await,
+        Command::Add(args) => add::run(args, &home).await,
+        Command::Remove(args) => remove::run(args, &home),
+        Command::Upgrade(args) => upgrade::run(args, &home).await,
+        Command::Check => check::run(&home),
+        Command::Info(args) => info::run(args, &home),
         Command::Uninstall(args) => uninstall::run(args, &home),
     }
 }

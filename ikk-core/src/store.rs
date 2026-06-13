@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use sha2::{Sha256, Digest};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 use crate::error::{IkkError, Result};
 
@@ -10,21 +10,21 @@ pub struct Store {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorePath {
-    pub hash:    String,
-    pub name:    String,
+    pub hash: String,
+    pub name: String,
     pub version: String,
-    pub path:    PathBuf,
-    pub binary:  PathBuf,
+    pub path: PathBuf,
+    pub binary: PathBuf,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StoreMeta {
-    pub name:           String,
-    pub version:        String,
-    pub source_url:     String,
+    pub name: String,
+    pub version: String,
+    pub source_url: String,
     pub archive_sha256: String,
-    pub binary_sha256:  String,
-    pub installed_at:   u64,
+    pub binary_sha256: String,
+    pub installed_at: u64,
 }
 
 impl Store {
@@ -33,7 +33,9 @@ impl Store {
         Ok(Self { root })
     }
 
-    pub fn root(&self) -> &Path { &self.root }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
 
     fn entry_dir_name(name: &str, version: &str, binary_hash: &str) -> String {
         format!("{}-{}-{}", &binary_hash[..12], name, version)
@@ -51,11 +53,11 @@ impl Store {
             .flatten()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().contains(&prefix))
-            .filter_map(|e| {
-                let path    = e.path();
-                let fname   = e.file_name().to_string_lossy().to_string();
-                let hash    = fname.split('-').next().unwrap_or("").to_string();
-                let binary  = path.join("bin").join(name);
+            .map(|e| {
+                let path = e.path();
+                let fname = e.file_name().to_string_lossy().to_string();
+                let hash = fname.split('-').next().unwrap_or("").to_string();
+                let binary = path.join("bin").join(name);
 
                 let version = std::fs::read_to_string(path.join("meta.toml"))
                     .ok()
@@ -63,7 +65,7 @@ impl Store {
                     .map(|m| m.version)
                     .unwrap_or_default();
 
-                Some(StorePath { hash, name: name.to_string(), version, path, binary })
+                StorePath { hash, name: name.to_string(), version, path, binary }
             })
             .collect();
 
@@ -75,27 +77,27 @@ impl Store {
     /// Insert a verified binary. Idempotent — skips if already present.
     pub fn insert(
         &self,
-        name:           &str,
-        version:        &str,
-        binary_bytes:   &[u8],
-        source_url:     &str,
+        name: &str,
+        version: &str,
+        binary_bytes: &[u8],
+        source_url: &str,
         archive_sha256: &str,
     ) -> Result<StorePath> {
         let binary_hash = sha256_hex(binary_bytes);
-        let entry       = self.entry_path(name, version, &binary_hash);
+        let entry = self.entry_path(name, version, &binary_hash);
 
         if entry.exists() {
             tracing::debug!("store hit: {}", entry.display());
             return Ok(StorePath {
-                hash:    binary_hash,
-                name:    name.to_string(),
+                hash: binary_hash,
+                name: name.to_string(),
                 version: version.to_string(),
-                binary:  entry.join("bin").join(name),
-                path:    entry,
+                binary: entry.join("bin").join(name),
+                path: entry,
             });
         }
 
-        let bin_dir     = entry.join("bin");
+        let bin_dir = entry.join("bin");
         std::fs::create_dir_all(&bin_dir)?;
 
         let binary_path = bin_dir.join(name);
@@ -110,12 +112,12 @@ impl Store {
 
         // metadata
         let meta = StoreMeta {
-            name:           name.to_string(),
-            version:        version.to_string(),
-            source_url:     source_url.to_string(),
+            name: name.to_string(),
+            version: version.to_string(),
+            source_url: source_url.to_string(),
             archive_sha256: archive_sha256.to_string(),
-            binary_sha256:  binary_hash.clone(),
-            installed_at:   unix_now(),
+            binary_sha256: binary_hash.clone(),
+            installed_at: unix_now(),
         };
         std::fs::write(
             entry.join("meta.toml"),
@@ -129,11 +131,11 @@ impl Store {
         tracing::info!("stored {}@{} ({})", name, version, &binary_hash[..12]);
 
         Ok(StorePath {
-            hash:    binary_hash,
-            name:    name.to_string(),
+            hash: binary_hash,
+            name: name.to_string(),
             version: version.to_string(),
-            binary:  binary_path,
-            path:    entry,
+            binary: binary_path,
+            path: entry,
         })
     }
 
@@ -144,7 +146,9 @@ impl Store {
             unseal_dir(&entry)?;
             // unseal binary too
             let bin = entry.join("bin").join(name);
-            if bin.exists() { unseal(&bin)?; }
+            if bin.exists() {
+                unseal(&bin)?;
+            }
             std::fs::remove_dir_all(&entry)?;
             tracing::info!("removed {}@{} from store", name, version);
         }
@@ -157,11 +161,12 @@ impl Store {
 
         for entry in std::fs::read_dir(&self.root)?.filter_map(|e| e.ok()) {
             let meta_path = entry.path().join("meta.toml");
-            if !meta_path.exists() { continue; }
+            if !meta_path.exists() {
+                continue;
+            }
 
-            let meta: StoreMeta = toml::from_str(
-                &std::fs::read_to_string(&meta_path)?
-            ).map_err(|e| IkkError::Toml(e.to_string()))?;
+            let meta: StoreMeta = toml::from_str(&std::fs::read_to_string(&meta_path)?)
+                .map_err(|e| IkkError::Toml(e.to_string()))?;
 
             let bin = entry.path().join("bin").join(&meta.name);
             if !bin.exists() {
@@ -174,7 +179,7 @@ impl Store {
                 results.push(VerifyResult::Ok(meta.name));
             } else {
                 results.push(VerifyResult::Tampered {
-                    name:     meta.name,
+                    name: meta.name,
                     expected: meta.binary_sha256,
                     actual,
                 });
@@ -235,10 +240,7 @@ fn unseal_dir(path: &Path) -> Result<()> {
 }
 
 fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 #[cfg(test)]
