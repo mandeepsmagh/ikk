@@ -224,6 +224,11 @@ ikk/
 
 ## Coming Next
 
+- **Per-project config** — `ikk.toml` in a project directory pins tool versions for that
+  project. `ikk sync` writes symlinks to `.ikk/bin/` (not `~/.ikk/bin`), so each project
+  gets its own tool versions without re-installing. Same content-addressed store, same
+  lock file, just different symlink targets. Shell hook (`ikk hook zsh`) adds `.ikk/bin`
+  to PATH before the global `~/.ikk/bin` — project versions win, no shims needed.
 - `ikk search` — search packages across configured forges
 - Sigstore / cosign verification layer
 - MSI extraction on Windows
