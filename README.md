@@ -19,11 +19,17 @@ A minimal, secure, cross-platform package manager for pre-built binaries.
 
 ## Install
 
+**macOS / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.sh | sh
 ```
 
-Or build from source:
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.ps1 | iex
+```
+
+**Build from source:**
 ```bash
 git clone https://github.com/mandeepsmagh/ikk
 cd ikk
