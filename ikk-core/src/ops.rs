@@ -1,5 +1,4 @@
 use std::path::Path;
-use url::Url;
 
 use crate::{
     config::{Config, PackageConfig, SecurityConfig},
@@ -198,7 +197,7 @@ async fn resolve_version(
     name:     &str,
     spec:     &str,
     remote:   &dyn Remote,
-    security: &SecurityConfig,
+    _security: &SecurityConfig,
 ) -> Result<String> {
     if spec != "latest" {
         return Ok(spec.to_string());
@@ -237,7 +236,7 @@ fn install_local(
     } else {
         // archive — extract
         let bytes       = std::fs::read(&path)?;
-        let archive_hash = sha256_hex(&bytes);
+        let _archive_hash = sha256_hex(&bytes);
         let binary_path = crate::extract::extract(
             &bytes,
             path.file_name().and_then(|n| n.to_str()).unwrap_or(""),

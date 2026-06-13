@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 
@@ -31,7 +31,7 @@ impl LockFile {
             return Ok(Self::default());
         }
         let s = std::fs::read_to_string(path)?;
-        let mut lock: LockFile = toml::from_str(&s)
+        let lock: LockFile = toml::from_str(&s)
             .map_err(|e| IkkError::Toml(e.to_string()))?;
 
         // verify tree root if present

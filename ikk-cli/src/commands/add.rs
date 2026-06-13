@@ -1,5 +1,5 @@
 use clap::Args;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use ikk_core::{
     config::PackageConfig,
     home::IkkHome,

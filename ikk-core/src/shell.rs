@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use crate::error::{IkkError, Result};
+use crate::error::Result;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shell {
