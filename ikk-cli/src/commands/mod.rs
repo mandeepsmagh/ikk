@@ -1,5 +1,6 @@
 pub mod add;
 pub mod check;
+pub mod config;
 pub mod info;
 pub mod init;
 pub mod remove;
