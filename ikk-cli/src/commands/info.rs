@@ -1,7 +1,7 @@
-use clap::Args;
-use anyhow::Result;
-use ikk_core::home::IkkHome;
 use super::Ctx;
+use anyhow::Result;
+use clap::Args;
+use ikk_core::home::IkkHome;
 
 #[derive(Args)]
 pub struct InfoArgs {
@@ -12,7 +12,10 @@ pub struct InfoArgs {
 pub fn run(args: InfoArgs, home: &IkkHome) -> Result<()> {
     let ctx = Ctx::load(home)?;
 
-    let pkg = ctx.config.packages.get(&args.name)
+    let pkg = ctx
+        .config
+        .packages
+        .get(&args.name)
         .ok_or_else(|| anyhow::anyhow!("'{}' not found in config", args.name))?;
 
     println!("package:  {}", args.name);

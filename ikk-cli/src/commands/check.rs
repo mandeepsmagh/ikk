@@ -1,6 +1,6 @@
+use super::Ctx;
 use anyhow::Result;
 use ikk_core::{home::IkkHome, store::VerifyResult};
-use super::Ctx;
 
 pub fn run(home: &IkkHome) -> Result<()> {
     let ctx = Ctx::load(home)?;
@@ -25,12 +25,11 @@ pub fn run(home: &IkkHome) -> Result<()> {
     }
 
     let mut tampered = 0;
-    let mut missing  = 0;
+    let mut missing = 0;
 
     for result in &results {
         match result {
-            VerifyResult::Ok(name) =>
-                println!("  ✓ {name}"),
+            VerifyResult::Ok(name) => println!("  ✓ {name}"),
             VerifyResult::Missing(name) => {
                 eprintln!("  ✗ {name}: binary missing from store");
                 missing += 1;
@@ -45,9 +44,7 @@ pub fn run(home: &IkkHome) -> Result<()> {
     }
 
     if tampered > 0 || missing > 0 {
-        anyhow::bail!(
-            "{tampered} tampered, {missing} missing — run 'ikk sync' to restore"
-        );
+        anyhow::bail!("{tampered} tampered, {missing} missing — run 'ikk sync' to restore");
     }
 
     println!("\nall {} packages verified ✓", results.len());

@@ -14,12 +14,12 @@ use crate::{
 // ── install ───────────────────────────────────────────────────────────────────
 
 pub struct InstallRequest<'a> {
-    pub name:     &'a str,
-    pub pkg:      &'a PackageConfig,
-    pub config:   &'a Config,
+    pub name: &'a str,
+    pub pkg: &'a PackageConfig,
+    pub config: &'a Config,
     pub security: &'a SecurityConfig,
     pub platform: &'a Platform,
-    pub home:     &'a IkkHome,
+    pub home: &'a IkkHome,
 }
 
 pub async fn install(
@@ -36,19 +36,19 @@ pub async fn install(
         return install_local(req, store, lock);
     }
 
-    let remote  = registry.remote_for(&url)?;
+    let remote = registry.remote_for(&url)?;
     let version = resolve_version(req.name, &req.pkg.version, &*remote, req.security).await?;
 
     // already at this version — nothing to do
-    if let Some(locked) = lock.get(req.name) {
-        if locked.version == version {
-            tracing::debug!("{} already at {version}", req.name);
-            return Ok(());
-        }
+    if let Some(locked) = lock.get(req.name)
+        && locked.version == version
+    {
+        tracing::debug!("{} already at {version}", req.name);
+        return Ok(());
     }
 
-    let assets   = remote.assets(&version).await?;
-    let asset    = best_asset(&assets, req.platform, req.pkg.binary.as_deref())?;
+    let assets = remote.assets(&version).await?;
+    let asset = best_asset(&assets, req.platform, req.pkg.binary.as_deref())?;
 
     tracing::info!("downloading {} {}…", req.name, version);
     let bytes = http.get(&asset.url).send().await?.bytes().await?;
@@ -59,10 +59,10 @@ pub async fn install(
 
     // extract binary
     let binary_name = req.pkg.binary.as_deref().unwrap_or(req.name);
-    let stage       = req.home.stage_dir();
+    let stage = req.home.stage_dir();
     let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, &stage)?;
     let binary_bytes = std::fs::read(&binary_path)?;
-    let binary_hash  = sha256_hex(&binary_bytes);
+    let binary_hash = sha256_hex(&binary_bytes);
 
     // remove old version from store if upgrading
     if let Some(old) = lock.get(req.name) {
@@ -71,13 +71,7 @@ pub async fn install(
     }
 
     // insert into store
-    let store_path = store.insert(
-        req.name,
-        &version,
-        &binary_bytes,
-        &asset.url,
-        &archive_hash,
-    )?;
+    let store_path = store.insert(req.name, &version, &binary_bytes, &asset.url, &archive_hash)?;
 
     // symlink into bin
     create_bin_link(&store_path.binary, &req.home.bin_dir().join(binary_name))?;
@@ -86,14 +80,17 @@ pub async fn install(
     let _ = std::fs::remove_file(&binary_path);
 
     // update lock
-    lock.insert(req.name.to_string(), LockedPackage {
-        version:        version.clone(),
-        source_url:     url.to_string(),
-        download_url:   asset.url.clone(),
-        archive_sha256: archive_hash,
-        binary_sha256:  binary_hash,
-        store_hash:     store_path.hash[..12].to_string(),
-    });
+    lock.insert(
+        req.name.to_string(),
+        LockedPackage {
+            version: version.clone(),
+            source_url: url.to_string(),
+            download_url: asset.url.clone(),
+            archive_sha256: archive_hash,
+            binary_sha256: binary_hash,
+            store_hash: store_path.hash[..12].to_string(),
+        },
+    );
 
     tracing::info!("installed {}@{}", req.name, version);
     Ok(())
@@ -108,9 +105,7 @@ pub fn remove(
     store: &Store,
     lock: &mut LockFile,
 ) -> Result<()> {
-    let locked = lock.get(name)
-        .ok_or_else(|| IkkError::PackageNotFound(name.to_string()))?
-        .clone();
+    let locked = lock.get(name).ok_or_else(|| IkkError::PackageNotFound(name.to_string()))?.clone();
 
     store.remove(name, &locked.version, &locked.store_hash)?;
     remove_bin_link(&home.bin_dir().join(binary_name))?;
@@ -124,34 +119,31 @@ pub fn remove(
 
 pub struct SyncReport {
     pub installed: Vec<String>,
-    pub removed:   Vec<String>,
+    pub removed: Vec<String>,
     pub unchanged: Vec<String>,
-    pub failed:    Vec<(String, String)>,  // (name, error)
+    pub failed: Vec<(String, String)>, // (name, error)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn sync(
-    config:    &Config,
-    security:  &SecurityConfig,
-    home:      &IkkHome,
-    registry:  &dyn RemoteRegistry,
-    store:     &Store,
-    lock:      &mut LockFile,
+    config: &Config,
+    security: &SecurityConfig,
+    home: &IkkHome,
+    registry: &dyn RemoteRegistry,
+    store: &Store,
+    lock: &mut LockFile,
     lock_path: &std::path::Path,
-    http:      &reqwest::Client,
-    platform:  &Platform,
+    http: &reqwest::Client,
+    platform: &Platform,
 ) -> Result<SyncReport> {
-    let mut report = SyncReport {
-        installed: vec![],
-        removed:   vec![],
-        unchanged: vec![],
-        failed:    vec![],
-    };
+    let mut report =
+        SyncReport { installed: vec![], removed: vec![], unchanged: vec![], failed: vec![] };
 
     // install / upgrade each package in config
     for (name, pkg) in &config.packages {
         let req = InstallRequest { name, pkg, config, security, platform, home };
         match install(&req, registry, store, lock, http).await {
-            Ok(_)  => {
+            Ok(_) => {
                 report.installed.push(name.clone());
                 // persist immediately — don't lose progress on later failures
                 let _ = lock.save(lock_path);
@@ -161,18 +153,18 @@ pub async fn sync(
     }
 
     // remove packages in lock but not in config
-    let to_remove: Vec<_> = lock.packages.keys()
-        .filter(|n| !config.packages.contains_key(*n))
-        .cloned()
-        .collect();
+    let to_remove: Vec<_> =
+        lock.packages.keys().filter(|n| !config.packages.contains_key(*n)).cloned().collect();
 
     for name in to_remove {
-        let binary = config.packages.get(&name)
+        let binary = config
+            .packages
+            .get(&name)
             .and_then(|p| p.binary.as_deref())
             .unwrap_or(&name)
             .to_string();
         match remove(&name, &binary, home, store, lock) {
-            Ok(_)  => report.removed.push(name),
+            Ok(_) => report.removed.push(name),
             Err(e) => report.failed.push((name, e.to_string())),
         }
     }
@@ -202,9 +194,9 @@ pub fn self_uninstall(home: &IkkHome) -> Result<()> {
 // ── version resolution ────────────────────────────────────────────────────────
 
 async fn resolve_version(
-    name:     &str,
-    spec:     &str,
-    remote:   &dyn Remote,
+    name: &str,
+    spec: &str,
+    remote: &dyn Remote,
     security: &SecurityConfig,
 ) -> Result<String> {
     if spec != "latest" {
@@ -214,18 +206,18 @@ async fn resolve_version(
     let release = remote.latest().await?;
 
     if release.prerelease || release.draft {
-        return Err(IkkError::Store(
-            format!("latest release of {name} is a prerelease or draft")
-        ));
+        return Err(IkkError::Store(format!("latest release of {name} is a prerelease or draft")));
     }
 
     if !security.is_old_enough(release.published_at.as_deref()) {
-        let age_days = release.published_at.as_deref()
-            .and_then(|s| crate::config::days_since_iso8601(s))
+        let age_days = release
+            .published_at
+            .as_deref()
+            .and_then(crate::config::days_since_iso8601)
             .unwrap_or(0);
         return Err(IkkError::ReleaseTooRecent {
-            name:     name.to_string(),
-            version:  release.version,
+            name: name.to_string(),
+            version: release.version,
             age_days,
             min_days: security.min_release_age_days,
         });
@@ -236,14 +228,10 @@ async fn resolve_version(
 
 // ── local install ─────────────────────────────────────────────────────────────
 
-fn install_local(
-    req:   &InstallRequest<'_>,
-    store: &Store,
-    lock:  &mut LockFile,
-) -> Result<()> {
-    let url  = req.config.resolve_source(&req.pkg.source)?;
-    let path = url.to_file_path()
-        .map_err(|_| IkkError::LocalPathNotFound(req.pkg.source.clone()))?;
+fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFile) -> Result<()> {
+    let url = req.config.resolve_source(&req.pkg.source)?;
+    let path =
+        url.to_file_path().map_err(|_| IkkError::LocalPathNotFound(req.pkg.source.clone()))?;
 
     if !path.exists() {
         return Err(IkkError::LocalPathNotFound(path.display().to_string()));
@@ -255,7 +243,7 @@ fn install_local(
         build_local(req, &path)?
     } else {
         // archive — extract
-        let bytes       = std::fs::read(&path)?;
+        let bytes = std::fs::read(&path)?;
         let _archive_hash = sha256_hex(&bytes);
         let binary_path = crate::extract::extract(
             &bytes,
@@ -266,24 +254,25 @@ fn install_local(
         std::fs::read(&binary_path)?
     };
 
-    let binary_hash  = sha256_hex(&binary_bytes);
-    let version      = req.pkg.version.replace("latest", "local");
+    let binary_hash = sha256_hex(&binary_bytes);
+    let version = req.pkg.version.replace("latest", "local");
 
-    let store_path = store.insert(
-        req.name, &version, &binary_bytes,
-        &path.display().to_string(), "",
-    )?;
+    let store_path =
+        store.insert(req.name, &version, &binary_bytes, &path.display().to_string(), "")?;
 
     create_bin_link(&store_path.binary, &req.home.bin_dir().join(binary_name))?;
 
-    lock.insert(req.name.to_string(), LockedPackage {
-        version,
-        source_url:     path.display().to_string(),
-        download_url:   path.display().to_string(),
-        archive_sha256: String::new(),
-        binary_sha256:  binary_hash,
-        store_hash:     store_path.hash[..12].to_string(),
-    });
+    lock.insert(
+        req.name.to_string(),
+        LockedPackage {
+            version,
+            source_url: path.display().to_string(),
+            download_url: path.display().to_string(),
+            archive_sha256: String::new(),
+            binary_sha256: binary_hash,
+            store_hash: store_path.hash[..12].to_string(),
+        },
+    );
 
     Ok(())
 }
@@ -292,32 +281,20 @@ fn build_local(req: &InstallRequest<'_>, dir: &Path) -> Result<Vec<u8>> {
     use crate::config::BuildSystem;
     use std::process::Command;
 
-    let build = req.pkg.build.as_ref()
-        .ok_or_else(|| IkkError::BuildFailed {
-            name:   req.name.to_string(),
-            reason: "local directory source requires a [build] section".into(),
-        })?;
+    let build = req.pkg.build.as_ref().ok_or_else(|| IkkError::BuildFailed {
+        name: req.name.to_string(),
+        reason: "local directory source requires a [build] section".into(),
+    })?;
 
     let status = match &build.system {
         BuildSystem::Cargo => {
-            Command::new("cargo")
-                .args(["build", "--release"])
-                .current_dir(dir)
-                .status()?
+            Command::new("cargo").args(["build", "--release"]).current_dir(dir).status()?
         }
-        BuildSystem::Make => {
-            Command::new("make").current_dir(dir).status()?
-        }
+        BuildSystem::Make => Command::new("make").current_dir(dir).status()?,
         BuildSystem::Cmake => {
             std::fs::create_dir_all(dir.join("build"))?;
-            Command::new("cmake")
-                .args([".."])
-                .current_dir(dir.join("build"))
-                .status()?;
-            Command::new("cmake")
-                .args(["--build", "."])
-                .current_dir(dir.join("build"))
-                .status()?
+            Command::new("cmake").args([".."]).current_dir(dir.join("build")).status()?;
+            Command::new("cmake").args(["--build", "."]).current_dir(dir.join("build")).status()?
         }
         BuildSystem::Script => {
             let script = build.script.as_deref().unwrap_or("./build.sh");
@@ -327,15 +304,13 @@ fn build_local(req: &InstallRequest<'_>, dir: &Path) -> Result<Vec<u8>> {
 
     if !status.success() {
         return Err(IkkError::BuildFailed {
-            name:   req.name.to_string(),
+            name: req.name.to_string(),
             reason: format!("{:?} exited with {status}", build.system),
         });
     }
 
     // find the binary
-    let bin_name = build.binary.as_deref()
-        .or(req.pkg.binary.as_deref())
-        .unwrap_or(req.name);
+    let bin_name = build.binary.as_deref().or(req.pkg.binary.as_deref()).unwrap_or(req.name);
 
     let candidates = [
         dir.join("target").join("release").join(bin_name),
@@ -350,7 +325,7 @@ fn build_local(req: &InstallRequest<'_>, dir: &Path) -> Result<Vec<u8>> {
     }
 
     Err(IkkError::BuildFailed {
-        name:   req.name.to_string(),
+        name: req.name.to_string(),
         reason: format!("binary '{bin_name}' not found after build"),
     })
 }

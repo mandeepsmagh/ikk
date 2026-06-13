@@ -1,15 +1,14 @@
-use clap::Args;
-use anyhow::Result;
-use ikk_core::{
-    config::PackageConfig,
-    home::IkkHome,
-    ops,
-};
 use super::Ctx;
+use anyhow::Result;
+use clap::Args;
+use ikk_core::{config::PackageConfig, home::IkkHome, ops};
 
 // ── add ───────────────────────────────────────────────────────────────────────
 
 #[derive(Args)]
+#[command(
+    after_help = "EXAMPLES:\n  ikk add BurntSushi/ripgrep\n  ikk add sharkdp/fd --version 8.7.0\n  ikk add ~/Downloads/tool.tar.gz --name tool --binary tool-bin\n  ikk add ~/projects/myproject --build cargo --binary myproject"
+)]
 pub struct AddArgs {
     /// Package source: owner/repo, host/owner/repo, full URL, or local path
     pub source: String,
@@ -32,36 +31,34 @@ pub struct AddArgs {
 }
 
 #[derive(clap::ValueEnum, Clone)]
-pub enum BuildSystemArg { Cargo, Make, Cmake, Script }
+pub enum BuildSystemArg {
+    Cargo,
+    Make,
+    Cmake,
+    Script,
+}
 
 pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
     let mut ctx = Ctx::load(home)?;
 
     // derive name from source if not provided
     let name = args.name.unwrap_or_else(|| {
-        args.source.split('/').last()
-            .unwrap_or(&args.source)
-            .trim_end_matches(".git")
-            .to_string()
+        args.source.split('/').next_back().unwrap_or(&args.source).trim_end_matches(".git").to_string()
     });
 
     let build = args.build.map(|b| ikk_core::config::BuildConfig {
         system: match b {
-            BuildSystemArg::Cargo  => ikk_core::config::BuildSystem::Cargo,
-            BuildSystemArg::Make   => ikk_core::config::BuildSystem::Make,
-            BuildSystemArg::Cmake  => ikk_core::config::BuildSystem::Cmake,
+            BuildSystemArg::Cargo => ikk_core::config::BuildSystem::Cargo,
+            BuildSystemArg::Make => ikk_core::config::BuildSystem::Make,
+            BuildSystemArg::Cmake => ikk_core::config::BuildSystem::Cmake,
             BuildSystemArg::Script => ikk_core::config::BuildSystem::Script,
         },
         binary: args.binary.clone(),
         script: None,
     });
 
-    let pkg = PackageConfig {
-        source:  args.source,
-        version: args.version,
-        binary:  args.binary,
-        build,
-    };
+    let pkg =
+        PackageConfig { source: args.source, version: args.version, binary: args.binary, build };
 
     let req = ikk_core::ops::InstallRequest {
         name: &name,

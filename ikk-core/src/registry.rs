@@ -3,7 +3,7 @@ use url::Url;
 
 use crate::{
     error::{IkkError, Result},
-    remote::{ConfiguredRemote, Remote, RemoteConfig, RemoteRegistry, owner_repo_from_url},
+    remote::{owner_repo_from_url, ConfiguredRemote, Remote, RemoteConfig, RemoteRegistry},
 };
 
 const DEFAULT_REMOTES: &str = include_str!("remotes.toml");
@@ -40,15 +40,13 @@ impl ConfigRegistry {
 
 impl RemoteRegistry for ConfigRegistry {
     fn remote_for(&self, url: &Url) -> Result<Box<dyn Remote>> {
-        let host = url.host_str()
-            .ok_or_else(|| IkkError::UnknownRemote(url.to_string()))?;
+        let host = url.host_str().ok_or_else(|| IkkError::UnknownRemote(url.to_string()))?;
 
-        let config = self.find(host)
-            .ok_or_else(|| IkkError::UnknownRemote(host.to_string()))?
-            .clone();
+        let config =
+            self.find(host).ok_or_else(|| IkkError::UnknownRemote(host.to_string()))?.clone();
 
-        let (owner, repo) = owner_repo_from_url(url)
-            .ok_or_else(|| IkkError::AmbiguousSource(url.to_string()))?;
+        let (owner, repo) =
+            owner_repo_from_url(url).ok_or_else(|| IkkError::AmbiguousSource(url.to_string()))?;
 
         Ok(Box::new(ConfiguredRemote::new(config, owner, repo)))
     }

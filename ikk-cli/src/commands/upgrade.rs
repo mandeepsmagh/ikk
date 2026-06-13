@@ -1,9 +1,9 @@
 // ── upgrade ───────────────────────────────────────────────────────────────────
 
-use clap::Args;
-use anyhow::Result;
-use ikk_core::{home::IkkHome, ops};
 use super::Ctx;
+use anyhow::Result;
+use clap::Args;
+use ikk_core::{home::IkkHome, ops};
 
 #[derive(Args)]
 pub struct UpgradeArgs {
@@ -20,13 +20,16 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
 
     let names: Vec<String> = match &args.name {
         Some(n) => vec![n.clone()],
-        None    => ctx.config.packages.keys().cloned().collect(),
+        None => ctx.config.packages.keys().cloned().collect(),
     };
 
     let mut any_change = false;
 
     for name in &names {
-        let pkg = ctx.config.packages.get(name)
+        let pkg = ctx
+            .config
+            .packages
+            .get(name)
             .ok_or_else(|| anyhow::anyhow!("package '{}' not found in config", name))?
             .clone();
 

@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 use crate::error::{IkkError, Result};
 use crate::remote::RemoteConfig;
@@ -37,7 +37,7 @@ pub struct Defaults {
 
 // ── security ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SecurityConfig {
     /// Minimum age in days before ikk will install a release.
     /// Protects against supply chain attacks where a release is
@@ -45,12 +45,6 @@ pub struct SecurityConfig {
     /// Default: 0 (disabled). Recommended: 3–7.
     #[serde(default)]
     pub min_release_age_days: u64,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self { min_release_age_days: 0 }
-    }
 }
 
 impl SecurityConfig {
@@ -77,10 +71,12 @@ impl SecurityConfig {
 pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
     let date_part = s.split('T').next()?;
     let mut parts = date_part.split('-');
-    let year:  i64  = parts.next()?.parse().ok()?;
-    let month: u32  = parts.next()?.parse().ok()?;
-    let day:   u32  = parts.next()?.parse().ok()?;
-    if month < 1 || month > 12 || day < 1 || day > 31 { return None; }
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: u32 = parts.next()?.parse().ok()?;
+    let day: u32 = parts.next()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
     // days since unix epoch using civil-date arithmetic
     let days = days_from_civil(year, month, day)?;
     let now_days = days_from_civil_utc_now()?;
@@ -139,17 +135,13 @@ pub struct TokenConfig {
 impl AuthConfig {
     /// Resolve token for a given host — reads from env at call time.
     pub fn token_for(&self, host: &str) -> Option<String> {
-        self.tokens.get(host)
-            .and_then(|t| std::env::var(&t.env).ok())
+        self.tokens.get(host).and_then(|t| std::env::var(&t.env).ok())
     }
 
     pub fn ssh_key_path(&self) -> PathBuf {
-        self.ssh_key.clone().unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".ssh")
-                .join("id_ed25519")
-        })
+        self.ssh_key
+            .clone()
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".ssh").join("id_ed25519"))
     }
 }
 
@@ -196,7 +188,9 @@ pub enum BuildSystem {
     Script,
 }
 
-fn default_version() -> String { "latest".into() }
+fn default_version() -> String {
+    "latest".into()
+}
 
 // ── impl ──────────────────────────────────────────────────────────────────────
 
@@ -213,8 +207,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let s = toml::to_string_pretty(self)
-            .map_err(|e| IkkError::Toml(e.to_string()))?;
+        let s = toml::to_string_pretty(self).map_err(|e| IkkError::Toml(e.to_string()))?;
         std::fs::write(path, s)?;
         Ok(())
     }
@@ -231,15 +224,14 @@ impl Config {
 /// owner/repo           → https://<default_remote>/owner/repo
 pub fn resolve_source_url(source: &str, default_remote: Option<&str>) -> Result<url::Url> {
     if source.starts_with("https://") || source.starts_with("http://") {
-        return url::Url::parse(source)
-            .map_err(|e| IkkError::AmbiguousSource(e.to_string()));
+        return url::Url::parse(source).map_err(|e| IkkError::AmbiguousSource(e.to_string()));
     }
 
     if source.starts_with("~/") || source.starts_with('/') {
-        let expanded = if source.starts_with("~/") {
+        let expanded = if let Some(stripped) = source.strip_prefix("~/") {
             dirs::home_dir()
                 .ok_or_else(|| IkkError::Store("cannot determine home directory".into()))?
-                .join(&source[2..])
+                .join(stripped)
         } else {
             PathBuf::from(source)
         };

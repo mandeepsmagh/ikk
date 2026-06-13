@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Platform {
-    pub os:   Os,
+    pub os: Os,
     pub arch: Arch,
 }
 
@@ -27,27 +27,35 @@ pub enum Arch {
 
 impl Platform {
     pub fn current() -> Self {
-        Self {
-            os:   Os::current(),
-            arch: Arch::current(),
-        }
+        Self { os: Os::current(), arch: Arch::current() }
     }
 }
 
 impl Os {
     pub fn current() -> Self {
-        #[cfg(target_os = "macos")]   { Os::MacOs }
-        #[cfg(target_os = "linux")]   { Os::Linux }
-        #[cfg(target_os = "windows")] { Os::Windows }
+        #[cfg(target_os = "macos")]
+        {
+            Os::MacOs
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Os::Linux
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Os::Windows
+        }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        { Os::Unknown }
+        {
+            Os::Unknown
+        }
     }
 
     /// All known asset name variants for this OS — checked in order
     pub fn variants(&self) -> &[&str] {
         match self {
-            Os::MacOs   => &["darwin", "macos", "apple-darwin", "osx"],
-            Os::Linux   => &["linux", "linux-gnu", "linux-musl", "unknown-linux"],
+            Os::MacOs => &["darwin", "macos", "apple-darwin", "osx"],
+            Os::Linux => &["linux", "linux-gnu", "linux-musl", "unknown-linux"],
             Os::Windows => &["windows", "win32", "win64", "pc-windows"],
             Os::Unknown => &[],
         }
@@ -56,17 +64,25 @@ impl Os {
 
 impl Arch {
     pub fn current() -> Self {
-        #[cfg(target_arch = "aarch64")] { Arch::Aarch64 }
-        #[cfg(target_arch = "x86_64")]  { Arch::X86_64 }
+        #[cfg(target_arch = "aarch64")]
+        {
+            Arch::Aarch64
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            Arch::X86_64
+        }
         #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-        { Arch::Unknown }
+        {
+            Arch::Unknown
+        }
     }
 
     /// All known asset name variants — checked in order
     pub fn variants(&self) -> &[&str] {
         match self {
             Arch::Aarch64 => &["aarch64", "arm64", "armv8"],
-            Arch::X86_64  => &["x86_64", "amd64", "x64"],
+            Arch::X86_64 => &["x86_64", "amd64", "x64"],
             Arch::Unknown => &[],
         }
     }
@@ -78,12 +94,18 @@ pub fn score_asset(name: &str, platform: &Platform) -> Option<u32> {
     let name = name.to_lowercase();
 
     // must match both arch and os
-    let arch_match = platform.arch.variants().iter()
+    let arch_match = platform
+        .arch
+        .variants()
+        .iter()
         .enumerate()
         .find(|(_, v)| name.contains(*v))
         .map(|(i, _)| (platform.arch.variants().len() - i) as u32)?;
 
-    let os_match = platform.os.variants().iter()
+    let os_match = platform
+        .os
+        .variants()
+        .iter()
         .enumerate()
         .find(|(_, v)| name.contains(*v))
         .map(|(i, _)| (platform.os.variants().len() - i) as u32)?;
@@ -96,7 +118,7 @@ pub fn score_asset(name: &str, platform: &Platform) -> Option<u32> {
     } else if name.ends_with(".exe") || name.ends_with(".dmg") || name.ends_with(".pkg") {
         0
     } else {
-        1  // raw binary
+        1 // raw binary
     };
 
     Some(arch_match + os_match + archive_bonus)
