@@ -12,6 +12,7 @@ pub async fn run(home: &IkkHome) -> Result<()> {
         &ctx.registry,
         &ctx.store,
         &mut ctx.lock,
+        &home.lock_file(),
         &ctx.http,
         &ctx.platform,
     ).await?;
@@ -30,6 +31,5 @@ pub async fn run(home: &IkkHome) -> Result<()> {
         anyhow::bail!("{} package(s) failed", report.failed.len());
     }
 
-    ctx.lock.save(&home.lock_file())?;
     Ok(())
 }
