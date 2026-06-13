@@ -126,6 +126,84 @@ impl LockFile {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pkg(version: &str, binary_hash: &str) -> LockedPackage {
+        // pad hash to at least 12 chars for store_hash
+        let hash = format!("{binary_hash:0>12}");
+        LockedPackage {
+            version:        version.into(),
+            source_url:     "https://github.com/foo/bar".into(),
+            download_url:   String::new(),
+            archive_sha256: String::new(),
+            binary_sha256:  hash.clone(),
+            store_hash:     hash[..12].into(),
+        }
+    }
+
+    #[test]
+    fn merkle_root_deterministic() {
+        let mut lock = LockFile::default();
+        lock.insert("a".into(), pkg("1.0", "aaa"));
+        lock.insert("b".into(), pkg("2.0", "bbb"));
+        let root1 = lock.compute_root();
+
+        let mut lock2 = LockFile::default();
+        lock2.insert("b".into(), pkg("2.0", "bbb"));
+        lock2.insert("a".into(), pkg("1.0", "aaa"));
+        let root2 = lock2.compute_root();
+
+        assert_eq!(root1, root2, "order-independent merkle root");
+    }
+
+    #[test]
+    fn merkle_root_changes_on_tamper() {
+        let mut lock = LockFile::default();
+        lock.insert("a".into(), pkg("1.0", "aaa"));
+        let root1 = lock.compute_root();
+
+        let mut lock2 = LockFile::default();
+        lock2.insert("a".into(), pkg("1.0", "bbb"));  // different hash
+        let root2 = lock2.compute_root();
+
+        assert_ne!(root1, root2, "tampered hash changes root");
+    }
+
+    #[test]
+    fn verify_empty_lock() {
+        let lock = LockFile::default();
+        assert!(lock.verify().is_ok());
+    }
+
+    #[test]
+    fn verify_detects_tamper() {
+        let mut lock = LockFile::default();
+        lock.insert("x".into(), pkg("1.0", "abc"));
+        lock.tree_root = Some("deadbeef".into());
+        assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn diff_detects_all_states() {
+        let mut lock = LockFile::default();
+        lock.insert("a".into(), pkg("1.0", "aaa"));
+        lock.insert("b".into(), pkg("2.0", "bbb"));
+
+        let installed: BTreeMap<_, _> = [
+            ("a".into(), "1.0".into()),  // matches lock
+            ("b".into(), "1.0".into()),  // wrong version
+            ("c".into(), "1.0".into()),  // not in lock
+        ].into();
+
+        let plan = lock.diff(&installed);
+        assert!(plan.up_to_date.contains(&"a".into()));
+        assert!(plan.to_install.contains(&"b".into()));
+        assert!(plan.to_remove.contains(&"c".into()));
+    }
+}
+
 #[derive(Debug)]
 pub struct SyncPlan {
     pub to_install: Vec<String>,

@@ -77,7 +77,7 @@ impl SecurityConfig {
 pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
     let date_part = s.split('T').next()?;
     let mut parts = date_part.split('-');
-    let year:  i32  = parts.next()?.parse().ok()?;
+    let year:  i64  = parts.next()?.parse().ok()?;
     let month: u32  = parts.next()?.parse().ok()?;
     let day:   u32  = parts.next()?.parse().ok()?;
     if month < 1 || month > 12 || day < 1 || day > 31 { return None; }
@@ -87,12 +87,14 @@ pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
     Some(now_days.saturating_sub(days))
 }
 
-fn days_from_civil(y: i32, m: u32, d: u32) -> Option<u64> {
-    // algorithm from Howard Hinnant
-    let y = y as i64;
-    let m = m as i64;
+fn days_from_civil(mut y: i64, m: u32, d: u32) -> Option<u64> {
+    // algorithm from Howard Hinnant — requires March-based months (Mar=3..Feb=14)
+    let mut m = m as i64;
+    if m <= 2 {
+        y -= 1;
+        m += 12;
+    }
     let d = d as i64;
-    if m <= 2 { return None; } // not needed for our use, but safe
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u64;
     let doy = (153 * (m as u64 - 3) + 2) / 5 + d as u64 - 1;
@@ -259,4 +261,61 @@ pub fn resolve_source_url(source: &str, default_remote: Option<&str>) -> Result<
     }
 
     Err(IkkError::AmbiguousSource(source.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_full_url() {
+        let url = resolve_source_url("https://github.com/foo/bar", None).unwrap();
+        assert_eq!(url.as_str(), "https://github.com/foo/bar");
+    }
+
+    #[test]
+    fn resolve_owner_repo_with_default_remote() {
+        let url = resolve_source_url("foo/bar", Some("github.com")).unwrap();
+        assert_eq!(url.as_str(), "https://github.com/foo/bar");
+    }
+
+    #[test]
+    fn resolve_host_owner_repo() {
+        let url = resolve_source_url("codeberg.org/helix/helix", None).unwrap();
+        assert_eq!(url.as_str(), "https://codeberg.org/helix/helix");
+    }
+
+    #[test]
+    fn resolve_owner_repo_without_default_fails() {
+        assert!(resolve_source_url("foo/bar", None).is_err());
+    }
+
+    #[test]
+    fn days_since_iso8601_known_date() {
+        // 2024-01-15 was roughly 890 days ago at time of writing, but we just check it's positive
+        let days = days_since_iso8601("2024-01-15T10:30:00Z").unwrap();
+        assert!(days > 365, "should be more than a year ago");
+    }
+
+    #[test]
+    fn days_since_iso8601_date_only() {
+        assert!(days_since_iso8601("2024-01-15").is_some());
+    }
+
+    #[test]
+    fn days_since_iso8601_invalid() {
+        assert!(days_since_iso8601("not-a-date").is_none());
+    }
+
+    #[test]
+    fn is_old_enough_disabled() {
+        let sec = SecurityConfig { min_release_age_days: 0 };
+        assert!(sec.is_old_enough(Some("2024-01-01T00:00:00Z")));
+    }
+
+    #[test]
+    fn is_old_enough_no_timestamp_rejected() {
+        let sec = SecurityConfig { min_release_age_days: 3 };
+        assert!(!sec.is_old_enough(None));
+    }
 }

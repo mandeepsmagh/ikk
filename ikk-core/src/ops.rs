@@ -130,14 +130,15 @@ pub struct SyncReport {
 }
 
 pub async fn sync(
-    config:   &Config,
-    security: &SecurityConfig,
-    home:     &IkkHome,
-    registry: &dyn RemoteRegistry,
-    store:    &Store,
-    lock:     &mut LockFile,
-    http:     &reqwest::Client,
-    platform: &Platform,
+    config:    &Config,
+    security:  &SecurityConfig,
+    home:      &IkkHome,
+    registry:  &dyn RemoteRegistry,
+    store:     &Store,
+    lock:      &mut LockFile,
+    lock_path: &std::path::Path,
+    http:      &reqwest::Client,
+    platform:  &Platform,
 ) -> Result<SyncReport> {
     let mut report = SyncReport {
         installed: vec![],
@@ -150,7 +151,11 @@ pub async fn sync(
     for (name, pkg) in &config.packages {
         let req = InstallRequest { name, pkg, config, security, platform, home };
         match install(&req, registry, store, lock, http).await {
-            Ok(_)  => report.installed.push(name.clone()),
+            Ok(_)  => {
+                report.installed.push(name.clone());
+                // persist immediately — don't lose progress on later failures
+                let _ = lock.save(lock_path);
+            }
             Err(e) => report.failed.push((name.clone(), e.to_string())),
         }
     }
@@ -171,6 +176,9 @@ pub async fn sync(
             Err(e) => report.failed.push((name, e.to_string())),
         }
     }
+
+    // final save — captures all removes
+    lock.save(lock_path)?;
 
     Ok(report)
 }
