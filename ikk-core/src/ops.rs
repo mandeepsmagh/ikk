@@ -197,7 +197,7 @@ async fn resolve_version(
     name:     &str,
     spec:     &str,
     remote:   &dyn Remote,
-    _security: &SecurityConfig,
+    security: &SecurityConfig,
 ) -> Result<String> {
     if spec != "latest" {
         return Ok(spec.to_string());
@@ -209,6 +209,18 @@ async fn resolve_version(
         return Err(IkkError::Store(
             format!("latest release of {name} is a prerelease or draft")
         ));
+    }
+
+    if !security.is_old_enough(release.published_at.as_deref()) {
+        let age_days = release.published_at.as_deref()
+            .and_then(|s| crate::config::days_since_iso8601(s))
+            .unwrap_or(0);
+        return Err(IkkError::ReleaseTooRecent {
+            name:     name.to_string(),
+            version:  release.version,
+            age_days,
+            min_days: security.min_release_age_days,
+        });
     }
 
     Ok(release.version)

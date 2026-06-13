@@ -45,34 +45,65 @@ pub struct SecurityConfig {
     /// Default: 0 (disabled). Recommended: 3–7.
     #[serde(default)]
     pub min_release_age_days: u64,
-
-    /// Reject releases published less than this many seconds ago.
-    /// Computed from min_release_age_days if not set explicitly.
-    #[serde(skip)]
-    pub min_release_age_secs: Option<u64>,
 }
 
 impl Default for SecurityConfig {
     fn default() -> Self {
-        Self {
-            min_release_age_days: 0,
-            min_release_age_secs: None,
-        }
+        Self { min_release_age_days: 0 }
     }
 }
 
 impl SecurityConfig {
-    pub fn min_age_secs(&self) -> u64 {
-        self.min_release_age_secs
-            .unwrap_or(self.min_release_age_days * 86_400)
+    /// Check whether a published_at timestamp is old enough.
+    /// `published_at` should be an ISO 8601 string (e.g. "2024-01-15T10:30:00Z").
+    /// Returns true if the check is disabled (days = 0) or if the release is old enough.
+    pub fn is_old_enough(&self, published_at: Option<&str>) -> bool {
+        if self.min_release_age_days == 0 {
+            return true;
+        }
+        let Some(ts) = published_at else {
+            // can't determine age — reject latest, require pinned version
+            return false;
+        };
+        let Some(release_age_days) = days_since_iso8601(ts) else {
+            return false;
+        };
+        release_age_days >= self.min_release_age_days
     }
+}
 
-    pub fn is_old_enough(&self, published_at_secs: u64) -> bool {
-        let min = self.min_age_secs();
-        if min == 0 { return true; }
-        let now = unix_now();
-        now.saturating_sub(published_at_secs) >= min
-    }
+/// Parse an ISO 8601 date string and return approximate days since epoch.
+/// Handles formats like "2024-01-15T10:30:00Z" and "2024-01-15".
+pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
+    let date_part = s.split('T').next()?;
+    let mut parts = date_part.split('-');
+    let year:  i32  = parts.next()?.parse().ok()?;
+    let month: u32  = parts.next()?.parse().ok()?;
+    let day:   u32  = parts.next()?.parse().ok()?;
+    if month < 1 || month > 12 || day < 1 || day > 31 { return None; }
+    // days since unix epoch using civil-date arithmetic
+    let days = days_from_civil(year, month, day)?;
+    let now_days = days_from_civil_utc_now()?;
+    Some(now_days.saturating_sub(days))
+}
+
+fn days_from_civil(y: i32, m: u32, d: u32) -> Option<u64> {
+    // algorithm from Howard Hinnant
+    let y = y as i64;
+    let m = m as i64;
+    let d = d as i64;
+    if m <= 2 { return None; } // not needed for our use, but safe
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let doy = (153 * (m as u64 - 3) + 2) / 5 + d as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era as u64 * 146097 + doe - 719468)
+}
+
+fn days_from_civil_utc_now() -> Option<u64> {
+    use std::time::SystemTime;
+    let dur = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).ok()?;
+    Some(dur.as_secs() / 86400)
 }
 
 // ── auth ─────────────────────────────────────────────────────────────────────
@@ -228,12 +259,4 @@ pub fn resolve_source_url(source: &str, default_remote: Option<&str>) -> Result<
     }
 
     Err(IkkError::AmbiguousSource(source.to_string()))
-}
-
-fn unix_now() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }

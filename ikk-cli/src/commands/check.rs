@@ -4,10 +4,23 @@ use super::Ctx;
 
 pub fn run(home: &IkkHome) -> Result<()> {
     let ctx = Ctx::load(home)?;
+
+    // verify lock integrity
+    println!("lock:     {}", home.lock_file().display());
+    match ctx.lock.verify() {
+        Ok(()) => println!("  ✓ merkle root valid"),
+        Err(e) => {
+            eprintln!("  ✗ {e}");
+            anyhow::bail!("lock file tampered — restore from backup");
+        }
+    }
+
+    // verify store binaries
+    println!("\nstore:    {}", home.store_dir().display());
     let results = ctx.store.verify_all()?;
 
     if results.is_empty() {
-        println!("no packages installed");
+        println!("  no packages installed");
         return Ok(());
     }
 
