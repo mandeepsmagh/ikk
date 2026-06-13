@@ -148,9 +148,18 @@ pub async fn sync(
     let mut report =
         SyncReport { installed: vec![], removed: vec![], unchanged: vec![], failed: vec![] };
 
-    // install / upgrade each package in config
+    // ── phase 1: resolve versions (sequential, fast API calls) ──────────────
+    struct Pending<'a> {
+        name: &'a str,
+        source: Box<dyn Source>,
+        version: String,
+        binary_name: String,
+        source_url: String,
+    }
+
+    let mut pending: Vec<Pending<'_>> = Vec::new();
+
     for (name, pkg) in &config.packages {
-        let req = InstallRequest { name, pkg, config, platform, home };
         let source = match make_source(pkg, config, registry, http, security) {
             Ok(s) => s,
             Err(e) => {
@@ -159,17 +168,115 @@ pub async fn sync(
             }
         };
 
-        match install(&req, &*source, store, lock).await {
-            Ok(_) => {
-                report.installed.push(name.clone());
-                // persist immediately — don't lose progress on later failures
-                let _ = lock.save(lock_path);
+        let version = match source.version(&pkg.version).await {
+            Ok(v) => v,
+            Err(e) => {
+                report.failed.push((name.clone(), e.to_string()));
+                continue;
             }
-            Err(e) => report.failed.push((name.clone(), e.to_string())),
+        };
+
+        // already at this version — skip
+        if let Some(locked) = lock.get(name)
+            && locked.version == version
+        {
+            tracing::debug!("{} already at {version}", name);
+            report.unchanged.push(name.clone());
+            continue;
+        }
+
+        let binary_name = pkg.binary.as_deref().unwrap_or(name).to_string();
+        let source_url =
+            config.resolve_source(&pkg.source).map(|u| u.to_string()).unwrap_or_default();
+        pending.push(Pending { name, source, version, binary_name, source_url });
+    }
+
+    // ── phase 2: parallel fetch (I/O bound) ─────────────────────────────────
+    if !pending.is_empty() {
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        let mut handles = Vec::with_capacity(pending.len());
+
+        for p in pending {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let name = p.name.to_string();
+            let source = p.source;
+            let version = p.version;
+            let binary_name = p.binary_name;
+            let source_url = p.source_url;
+            let platform = platform.clone();
+            let stage_dir = home.stage_dir();
+            let home_bin = home.bin_dir();
+
+            handles.push(tokio::spawn(async move {
+                let _permit = permit;
+                let result =
+                    source.fetch(&version, &binary_name, &platform, None, &stage_dir).await;
+                (name, version, binary_name, source_url, home_bin, result)
+            }));
+        }
+
+        // ── phase 3: sequential store + link + lock ─────────────────────────
+        for handle in handles {
+            let (name, version, binary_name, source_url, home_bin, fetch_result) =
+                match handle.await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        report.failed.push((String::new(), e.to_string()));
+                        continue;
+                    }
+                };
+
+            match fetch_result {
+                Ok(fetched) => {
+                    let binary_hash = sha256_hex(&fetched.binary_bytes);
+
+                    // remove old version
+                    if let Some(old) = lock.get(&name) {
+                        let _ = store.remove(&name, &old.version, &old.store_hash);
+                        let _ = remove_bin_link(&home_bin.join(&binary_name));
+                    }
+
+                    match store.insert(
+                        &name,
+                        &version,
+                        &fetched.binary_bytes,
+                        &fetched.source_url,
+                        &fetched.archive_hash,
+                    ) {
+                        Ok(store_path) => {
+                            let _ =
+                                create_bin_link(&store_path.binary, &home_bin.join(&binary_name));
+                            lock.insert(
+                                name.clone(),
+                                LockedPackage {
+                                    version: version.clone(),
+                                    source_url: source_url.clone(),
+                                    download_url: fetched.source_url,
+                                    archive_sha256: fetched.archive_hash,
+                                    binary_sha256: binary_hash,
+                                    store_hash: store_path.hash[..12].to_string(),
+                                },
+                            );
+                            tracing::info!("installed {}@{}", name, version);
+                            report.installed.push(name);
+                            let _ = lock.save(lock_path);
+                        }
+                        Err(e) => {
+                            report.failed.push((name, e.to_string()));
+                        }
+                    }
+                }
+                Err(e) => {
+                    report.failed.push((name, e.to_string()));
+                }
+            }
         }
     }
 
-    // remove packages in lock but not in config
+    // ── remove packages in lock but not in config ───────────────────────────
     let to_remove: Vec<_> =
         lock.packages.keys().filter(|n| !config.packages.contains_key(*n)).cloned().collect();
 
