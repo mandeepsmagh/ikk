@@ -9,7 +9,7 @@ set -e
 
 IKK_REPO="mandeepsmagh/ikk"
 IKK_VERSION="${IKK_VERSION:-latest}"
-IKK_INSTALL_DIR="${IKK_INSTALL_DIR:-$HOME/.local/bin}"
+IKK_INSTALL_DIR="${IKK_INSTALL_DIR:-$HOME/.ikk/bin}"
 
 # ── detect platform ────────────────────────────────────────────────────────
 case "$(uname -s)" in
@@ -59,6 +59,4 @@ install -m 755 "$TMPDIR/ikk" "$IKK_INSTALL_DIR/ikk"
 echo ""
 echo "ikk installed to ${IKK_INSTALL_DIR}/ikk"
 echo ""
-echo "add to PATH and initialise:"
-echo "  export PATH=\"${IKK_INSTALL_DIR}:\$PATH\""
-echo "  ikk init --remote github.com"
+echo "run 'ikk init' to set up ~/.ikk and add to PATH"

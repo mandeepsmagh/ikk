@@ -3,7 +3,7 @@
 
 param(
     [string]$Version = "latest",
-    [string]$InstallDir = "$env:LOCALAPPDATA\ikk"
+    [string]$InstallDir = "$env:USERPROFILE\.ikk\bin"
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +57,4 @@ $env:Path = "$InstallDir;$env:Path"
 Write-Host ""
 Write-Host "ikk installed to ${InstallDir}\ikk.exe"
 Write-Host ""
-Write-Host "add to PATH permanently and initialise:"
-Write-Host "  [Environment]::SetEnvironmentVariable('Path', '${InstallDir};' + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')"
-Write-Host "  ikk init --remote github.com"
+Write-Host "run 'ikk init' to set up ~/.ikk and add to PATH"
