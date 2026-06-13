@@ -33,10 +33,14 @@ impl LockFile {
         let s = std::fs::read_to_string(path)?;
         let lock: LockFile = toml::from_str(&s)
             .map_err(|e| IkkError::Toml(e.to_string()))?;
+        lock.verify()?;
+        Ok(lock)
+    }
 
-        // verify tree root if present
-        if let Some(stored_root) = &lock.tree_root.clone() {
-            let computed = lock.compute_root();
+    /// Verify the stored tree root matches computed — call to detect tampering.
+    pub fn verify(&self) -> Result<()> {
+        if let Some(stored_root) = &self.tree_root {
+            let computed = self.compute_root();
             if computed != *stored_root {
                 return Err(IkkError::HashMismatch {
                     name:     "ikk.lock".into(),
@@ -46,8 +50,7 @@ impl LockFile {
                 });
             }
         }
-
-        Ok(lock)
+        Ok(())
     }
 
     pub fn save(&mut self, path: &Path) -> Result<()> {

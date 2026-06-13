@@ -13,6 +13,7 @@ draft_path            = "draft"
 assets_path           = "assets"
 asset_url_path        = "browser_download_url"
 asset_name_path       = "name"
+published_at_path     = "published_at"
 auth_env              = "GITHUB_TOKEN"
 
 [[remotes]]
@@ -24,6 +25,7 @@ draft_path            = ""
 assets_path           = "assets.links"
 asset_url_path        = "url"
 asset_name_path       = "name"
+published_at_path     = "released_at"
 auth_env              = "GITLAB_TOKEN"
 
 [[remotes]]
@@ -36,6 +38,7 @@ draft_path            = "draft"
 assets_path           = "assets"
 asset_url_path        = "browser_download_url"
 asset_name_path       = "name"
+published_at_path     = "published_at"
 auth_env              = "CODEBERG_TOKEN"
 
 [[remotes]]
@@ -48,4 +51,5 @@ draft_path            = "draft"
 assets_path           = "assets"
 asset_url_path        = "browser_download_url"
 asset_name_path       = "name"
+published_at_path     = "published_at"
 auth_env              = "GITEA_TOKEN"

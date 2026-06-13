@@ -9,9 +9,10 @@ use crate::error::{IkkError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Release {
-    pub version:    String,
-    pub prerelease: bool,
-    pub draft:      bool,
+    pub version:      String,
+    pub prerelease:   bool,
+    pub draft:        bool,
+    pub published_at: Option<String>,  // ISO 8601
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +42,7 @@ pub struct RemoteConfig {
     pub assets_path:           String,   // path to assets array
     pub asset_url_path:        String,   // path within each asset object
     pub asset_name_path:       String,
+    pub published_at_path:     Option<String>, // path to ISO 8601 timestamp
     pub auth_env:              Option<String>,
 }
 
@@ -113,7 +115,12 @@ impl ConfiguredRemote {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        Ok(Release { version, prerelease, draft })
+        let published_at = self.config.published_at_path.as_ref()
+            .and_then(|path| self.extract(json, path))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        Ok(Release { version, prerelease, draft, published_at })
     }
 
     fn parse_assets(&self, json: &Value) -> Vec<Asset> {
