@@ -1,0 +1,83 @@
+use clap::Args;
+use anyhow::{Result, bail};
+use ikk_core::{
+    config::PackageConfig,
+    home::IkkHome,
+    ops,
+};
+use super::Ctx;
+
+// ── add ───────────────────────────────────────────────────────────────────────
+
+#[derive(Args)]
+pub struct AddArgs {
+    /// Package source: owner/repo, host/owner/repo, full URL, or local path
+    pub source: String,
+
+    /// Package name (defaults to repo name)
+    #[arg(long, short)]
+    pub name: Option<String>,
+
+    /// Version to install (default: latest)
+    #[arg(long, short, default_value = "latest")]
+    pub version: String,
+
+    /// Binary name inside archive (auto-detected if not set)
+    #[arg(long)]
+    pub binary: Option<String>,
+
+    /// Build from source using this build system
+    #[arg(long, value_enum)]
+    pub build: Option<BuildSystemArg>,
+}
+
+#[derive(clap::ValueEnum, Clone)]
+pub enum BuildSystemArg { Cargo, Make, Cmake, Script }
+
+pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
+    let mut ctx = Ctx::load(home)?;
+
+    // derive name from source if not provided
+    let name = args.name.unwrap_or_else(|| {
+        args.source.split('/').last()
+            .unwrap_or(&args.source)
+            .trim_end_matches(".git")
+            .to_string()
+    });
+
+    let build = args.build.map(|b| ikk_core::config::BuildConfig {
+        system: match b {
+            BuildSystemArg::Cargo  => ikk_core::config::BuildSystem::Cargo,
+            BuildSystemArg::Make   => ikk_core::config::BuildSystem::Make,
+            BuildSystemArg::Cmake  => ikk_core::config::BuildSystem::Cmake,
+            BuildSystemArg::Script => ikk_core::config::BuildSystem::Script,
+        },
+        binary: args.binary.clone(),
+        script: None,
+    });
+
+    let pkg = PackageConfig {
+        source:  args.source,
+        version: args.version,
+        binary:  args.binary,
+        build,
+    };
+
+    let req = ikk_core::ops::InstallRequest {
+        name: &name,
+        pkg: &pkg,
+        config: &ctx.config,
+        security: &ctx.config.security,
+        platform: &ctx.platform,
+        home: &ctx.home,
+    };
+
+    ops::install(&req, &ctx.registry, &ctx.store, &mut ctx.lock, &ctx.http).await?;
+
+    // persist to config + lock
+    ctx.config.packages.insert(name, pkg);
+    ctx.config.save(&home.config_file())?;
+    ctx.lock.save(&home.lock_file())?;
+
+    Ok(())
+}
