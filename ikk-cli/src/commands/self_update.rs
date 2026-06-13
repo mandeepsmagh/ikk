@@ -29,7 +29,7 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
     let source =
         ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
 
-    let latest = source.version("latest").await?;
+    let latest = source.version("latest", SELF_BINARY).await?;
     let current = env!("CARGO_PKG_VERSION");
 
     if latest == current {
