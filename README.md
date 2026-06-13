@@ -152,6 +152,9 @@ ikk remove <name>
 ikk upgrade [name] [--force]
 ikk check
 ikk info <name>
+ikk self-update [--check]
+ikk config get <key>
+ikk config set <key> <value>
 ikk uninstall [--yes]
 ```
 
@@ -189,15 +192,16 @@ ikk/
 │   └── src/
 │       ├── config.rs    ← Config, SecurityConfig, AuthConfig
 │       ├── error.rs     ← IkkError
-│       ├── extract.rs   ← archive extraction (tar.gz, tar.xz, zip, dmg, raw)
+│       ├── extract.rs   ← archive extraction (tar.gz, tar.xz, zip, dmg, msi, raw)
 │       ├── home.rs      ← IkkHome — ~/.ikk layout
 │       ├── lock.rs      ← LockFile, merkle root
-│       ├── ops.rs       ← install, remove, sync, upgrade, self_uninstall
+│       ├── ops.rs       ← install, remove, sync (parallel), self_uninstall
 │       ├── platform.rs  ← Platform, asset scoring
 │       ├── registry.rs  ← ConfigRegistry — config-driven forge dispatch
 │       ├── remote.rs    ← Remote trait, ConfiguredRemote, RemoteConfig
 │       ├── remotes.toml ← built-in forge definitions (compiled in)
 │       ├── shell.rs     ← shell detection, rc file integration
+│       ├── source.rs    ← Source trait — unified local + remote install
 │       └── store.rs     ← content-addressed store, verify
 │
 └── ikk-cli/     ← thin clap shell — wires everything together
@@ -206,9 +210,11 @@ ikk/
         └── commands/
             ├── add.rs
             ├── check.rs
+            ├── config.rs
             ├── info.rs
             ├── init.rs
             ├── remove.rs
+            ├── self_update.rs
             ├── sync.rs
             ├── uninstall.rs
             └── upgrade.rs
@@ -218,7 +224,7 @@ ikk/
 
 ## Coming Next
 
-- `ikk-agent` — background FSEvents/inotify watcher, pre-fetch on lock change
+- `ikk search` — search packages across configured forges
 - Sigstore / cosign verification layer
-- Landlock sandbox for builds (Linux kernel 5.13+)
-- OTLP telemetry → personal-insights pipeline
+- MSI extraction on Windows
+- `.deb` / `.rpm` extraction
