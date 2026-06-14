@@ -15,6 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.sh | 
 **Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.ps1 | iex
+# open a new terminal, then:
 ikk init --remote github.com
 ```
 

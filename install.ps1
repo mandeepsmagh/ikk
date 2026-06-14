@@ -51,11 +51,14 @@ Expand-Archive $zip -DestinationPath $tmp
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Copy-Item "$tmp\ikk.exe" "$InstallDir\ikk.exe" -Force
 
-# add to PATH for current session
-$env:Path = "$InstallDir;$env:Path"
+# add to user PATH permanently
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($userPath -notlike "*$InstallDir*") {
+    [Environment]::SetEnvironmentVariable('Path', "$InstallDir;$userPath", 'User')
+}
 
 Write-Host ""
 Write-Host "ikk installed to ${InstallDir}\ikk.exe"
 Write-Host ""
-Write-Host "PATH is set for this session. To make it permanent, run:"
+Write-Host "open a new terminal and initialise:"
 Write-Host "  ikk init --remote github.com"
