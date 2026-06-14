@@ -22,7 +22,6 @@ ikk init --remote github.com
 **Build from source:**
 ```bash
 git clone https://github.com/mandeepsmagh/ikk && cd ikk
-git config core.hooksPath .githooks   # enable pre-push fmt check
 cargo build --release && mkdir -p ~/.ikk/bin && cp target/release/ikk ~/.ikk/bin/
 ```
 ```
