@@ -9,11 +9,13 @@ Minimal, secure, cross-platform package manager for pre-built binaries. No sudo,
 **macOS / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.sh | sh
+~/.ikk/bin/ikk init --remote github.com
 ```
 
 **Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.ps1 | iex
+ikk init --remote github.com
 ```
 
 **Build from source:**
