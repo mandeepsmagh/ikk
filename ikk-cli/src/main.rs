@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod commands;
 use commands::{
-    add, check, config, info, init, list, remove, self_update, sync, uninstall, upgrade,
+    add, check, config, gc, info, init, list, remove, self_update, sync, uninstall, upgrade,
 };
 
 #[derive(Parser)]
@@ -60,6 +60,10 @@ enum Command {
 
     /// Get or set config values
     Config(config::ConfigArgs),
+
+    /// Remove unused packages from the store
+    #[command(visible_alias = "clean")]
+    Gc(gc::GcArgs),
 }
 
 #[tokio::main]
@@ -91,5 +95,6 @@ async fn main() -> Result<()> {
         Command::Uninstall(args) => uninstall::run(args, &home),
         Command::SelfUpdate(args) => self_update::run(args, &home).await,
         Command::Config(args) => config::run(args, &home),
+        Command::Gc(args) => gc::run(args, &home),
     }
 }

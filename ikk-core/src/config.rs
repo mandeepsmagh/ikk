@@ -21,6 +21,9 @@ pub struct Config {
     #[serde(default)]
     pub packages: BTreeMap<String, PackageConfig>,
 
+    #[serde(default)]
+    pub store: StoreConfig,
+
     /// User-defined remotes — appended to built-in defaults, later wins
     #[serde(default)]
     pub remotes: Vec<RemoteConfig>,
@@ -143,6 +146,15 @@ impl AuthConfig {
             .clone()
             .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".ssh").join("id_ed25519"))
     }
+}
+
+// ── store config ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StoreConfig {
+    /// Path to the content-addressed store.
+    /// Default: ~/.ikk/store. Set to a shared directory for LAN cache.
+    pub path: Option<PathBuf>,
 }
 
 // ── package config ────────────────────────────────────────────────────────────

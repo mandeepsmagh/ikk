@@ -56,6 +56,7 @@ ikk upgrade [name] [--force]      upgrade to latest versions
 ikk list [name]                   list packages and install status
 ikk info <name>                   show package details
 ikk check                         verify lock integrity and binary hashes
+ikk gc [--dry-run]                remove unused packages from the store
 ikk config get <key>              read a config value
 ikk config set <key> <value>      set a config value
 ikk self-update [--check]         update ikk itself
