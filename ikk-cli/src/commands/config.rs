@@ -97,8 +97,7 @@ fn run_show_all(home: &IkkHome) -> Result<()> {
     println!("security.min_release_age_days {}", config.security.min_release_age_days);
     println!("packages                      {} configured", config.packages.len());
     if !config.remotes.is_empty() {
-        let hosts: Vec<&str> =
-            config.remotes.iter().map(|r| r.host.as_str()).collect();
+        let hosts: Vec<&str> = config.remotes.iter().map(|r| r.host.as_str()).collect();
         println!("remotes                       {}", hosts.join(", "));
     }
     Ok(())
