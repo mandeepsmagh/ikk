@@ -1,8 +1,13 @@
 # ikk — ਇੱਕ
 
-> one command to manage all packages.
+> one command to manage all your global tools.
 
-Minimal, secure, cross-platform package manager for pre-built binaries. No sudo, no forge lock-in, no version juggling.
+Minimal, secure, cross-platform package manager for system-wide CLI tools —
+neovim, ripgrep, fd, duckdb, bun, llama.cpp, and anything else that ships as
+pre-built binaries. For language toolchains (cargo, npm, nuget), keep using
+those tools. Ikk handles everything else.
+
+No sudo, no forge lock-in, no version juggling.
 
 ## Install
 
@@ -84,7 +89,5 @@ One command. All tools restored at verified versions from a committed lock file.
 
 ## Coming Next
 
-- Per-project config with `.ikk/bin` directories
-- Provenance verification (forge-agnostic, not yet standardized)
 - MSI extraction on Windows
 - `.deb` / `.rpm` extraction on Linux
