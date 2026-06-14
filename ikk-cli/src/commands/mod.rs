@@ -1,6 +1,7 @@
 pub mod add;
 pub mod check;
 pub mod config;
+pub mod gc;
 pub mod info;
 pub mod init;
 pub mod list;
@@ -31,7 +32,8 @@ impl Ctx {
     pub fn load(home: &IkkHome) -> Result<Self> {
         let config = Config::load(&home.config_file())?;
         let lock = LockFile::load(&home.lock_file())?;
-        let store = Store::open(home.store_dir())?;
+        let store_path = config.store.path.clone().unwrap_or_else(|| home.store_dir());
+        let store = Store::open(store_path)?;
         let platform = Platform::current();
         let registry = ConfigRegistry::new(config.remotes.clone());
 
