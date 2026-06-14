@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod commands;
-use commands::{add, check, config, info, init, remove, self_update, sync, uninstall, upgrade};
+use commands::{
+    add, check, config, info, init, list, remove, self_update, sync, uninstall, upgrade,
+};
 
 #[derive(Parser)]
 #[command(
@@ -45,6 +47,10 @@ enum Command {
     /// Show details about an installed package
     Info(info::InfoArgs),
 
+    /// List configured packages and their install status
+    #[command(visible_alias = "ls")]
+    List(list::ListArgs),
+
     /// Completely remove ikk from this machine (all packages, config, PATH entry)
     #[command(visible_alias = "rmrf")]
     Uninstall(uninstall::UninstallArgs),
@@ -81,6 +87,7 @@ async fn main() -> Result<()> {
         Command::Upgrade(args) => upgrade::run(args, &home).await,
         Command::Check => check::run(&home),
         Command::Info(args) => info::run(args, &home),
+        Command::List(args) => list::run(args, &home),
         Command::Uninstall(args) => uninstall::run(args, &home),
         Command::SelfUpdate(args) => self_update::run(args, &home).await,
         Command::Config(args) => config::run(args, &home),
