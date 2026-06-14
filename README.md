@@ -245,6 +245,5 @@ ikk/
   source (not just "same bits as last time"). Must work across all forges — GitHub, GitLab,
   Codeberg, self-hosted. Research and implement once a forge-agnostic standard emerges.
   No dependency on proprietary attestation services.
-- `ikk search` — search packages across configured forges
 - MSI extraction on Windows
 - `.deb` / `.rpm` extraction
