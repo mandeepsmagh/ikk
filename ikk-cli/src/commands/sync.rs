@@ -1,9 +1,22 @@
 use super::Ctx;
 use anyhow::Result;
-use ikk_core::{home::IkkHome, ops};
+use clap::Args;
+use ikk_core::{home::IkkHome, lock::LockFile, ops};
 
-pub async fn run(home: &IkkHome) -> Result<()> {
+#[derive(Args)]
+pub struct SyncArgs {
+    /// Path to lock file for new machine bootstrap
+    #[arg(long)]
+    pub lock: Option<std::path::PathBuf>,
+}
+
+pub async fn run(args: SyncArgs, home: &IkkHome) -> Result<()> {
     let mut ctx = Ctx::load(home)?;
+
+    // if --lock is provided, load lock from the specified path
+    if let Some(lock_path) = &args.lock {
+        ctx.lock = LockFile::load(lock_path)?;
+    }
 
     let report = ops::sync(
         &ctx.config,
