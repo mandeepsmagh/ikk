@@ -3,6 +3,7 @@ pub mod check;
 pub mod config;
 pub mod info;
 pub mod init;
+pub mod list;
 pub mod remove;
 pub mod self_update;
 pub mod sync;
