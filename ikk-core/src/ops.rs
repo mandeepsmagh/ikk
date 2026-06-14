@@ -79,7 +79,12 @@ pub fn make_source(
         Ok(Box::new(LocalSource::new(path, is_dir, pkg.build.clone())))
     } else {
         let remote = registry.remote_for(&url)?;
-        Ok(Box::new(RemoteSource::new(remote, std::sync::Arc::new(http.clone()), security.clone())))
+        Ok(Box::new(RemoteSource::new(
+            remote,
+            std::sync::Arc::new(http.clone()),
+            security.clone(),
+            pkg.min_release_age_days,
+        )))
     }
 }
 

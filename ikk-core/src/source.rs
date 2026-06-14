@@ -40,6 +40,7 @@ pub(crate) struct RemoteSource {
     remote: Box<dyn Remote>,
     http: std::sync::Arc<reqwest::Client>,
     security: SecurityConfig,
+    age_override: Option<u64>,
 }
 
 impl RemoteSource {
@@ -47,8 +48,9 @@ impl RemoteSource {
         remote: Box<dyn Remote>,
         http: std::sync::Arc<reqwest::Client>,
         security: SecurityConfig,
+        age_override: Option<u64>,
     ) -> Self {
-        Self { remote, http, security }
+        Self { remote, http, security, age_override }
     }
 }
 
@@ -66,17 +68,23 @@ impl Source for RemoteSource {
         }
 
         if !self.security.is_old_enough(release.published_at.as_deref()) {
-            let age_days = release
-                .published_at
-                .as_deref()
-                .and_then(crate::config::days_since_iso8601)
-                .unwrap_or(0);
-            return Err(IkkError::ReleaseTooRecent {
-                name: name.to_string(),
-                version: release.version,
-                age_days,
-                min_days: self.security.min_release_age_days,
-            });
+            // per-package override: 0 = always allow, n = use n days instead of global
+            if self.age_override != Some(0) {
+                let age_days = release
+                    .published_at
+                    .as_deref()
+                    .and_then(crate::config::days_since_iso8601)
+                    .unwrap_or(0);
+                let min_days = self.age_override.unwrap_or(self.security.min_release_age_days);
+                if age_days < min_days {
+                    return Err(IkkError::ReleaseTooRecent {
+                        name: name.to_string(),
+                        version: release.version,
+                        age_days,
+                        min_days,
+                    });
+                }
+            }
         }
 
         Ok(release.version)

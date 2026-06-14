@@ -180,6 +180,11 @@ pub struct PackageConfig {
     /// Build config — only for local source directories or build-from-source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildConfig>,
+
+    /// Override global min_release_age_days for this package.
+    /// Set to 0 to always allow the latest release immediately.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_release_age_days: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

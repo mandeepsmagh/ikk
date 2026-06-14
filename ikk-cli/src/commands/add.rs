@@ -62,8 +62,13 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
         script: None,
     });
 
-    let pkg =
-        PackageConfig { source: args.source, version: args.version, binary: args.binary, build };
+    let pkg = PackageConfig {
+        source: args.source,
+        version: args.version,
+        binary: args.binary,
+        build,
+        min_release_age_days: None,
+    };
 
     let req = ikk_core::ops::InstallRequest {
         name: &name,

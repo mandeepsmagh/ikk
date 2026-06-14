@@ -24,6 +24,7 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
         version: "latest".into(),
         binary: Some(SELF_BINARY.into()),
         build: None,
+        min_release_age_days: None,
     };
 
     let source =
