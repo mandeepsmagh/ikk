@@ -87,6 +87,4 @@ ikk sync --lock ~/dotfiles/ikk.lock
 
 One command. All tools restored at verified versions from a committed lock file.
 
-## Coming Next
 
-- MSI extraction on Windows
