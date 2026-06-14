@@ -26,9 +26,9 @@ cargo build --release && mkdir -p ~/.ikk/bin && cp target/release/ikk ~/.ikk/bin
 
 ```bash
 ikk init --remote github.com           # one-time setup
-ikk add BurntSushi/ripgrep             # add packages
+ikk add BurntSushi/ripgrep             # add + install immediately
 ikk add sharkdp/fd
-ikk sync                               # install everything
+ikk sync                               # or add entries to ikk.toml and sync all at once
 ikk list                               # see what's installed
 ikk check                              # verify nothing's tampered
 ```
