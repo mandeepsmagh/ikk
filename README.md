@@ -19,7 +19,7 @@ irm https://raw.githubusercontent.com/mandeepsmagh/ikk/main/install.ps1 | iex
 **Build from source:**
 ```bash
 git clone https://github.com/mandeepsmagh/ikk && cd ikk
-cargo build --release && cp target/release/ikk ~/.local/bin/
+cargo build --release && mkdir -p ~/.ikk/bin && cp target/release/ikk ~/.ikk/bin/
 ```
 
 ## Quick Start
