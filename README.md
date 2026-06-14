@@ -162,6 +162,7 @@ ikk remove <name>
 ikk upgrade [name] [--force]
 ikk check
 ikk info <name>
+ikk list [name]
 ikk self-update [--check]
 ikk config get <key>
 ikk config set <key> <value>
@@ -223,6 +224,7 @@ ikk/
             ├── config.rs
             ├── info.rs
             ├── init.rs
+            ├── list.rs
             ├── remove.rs
             ├── self_update.rs
             ├── sync.rs
