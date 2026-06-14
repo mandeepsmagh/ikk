@@ -90,4 +90,3 @@ One command. All tools restored at verified versions from a committed lock file.
 ## Coming Next
 
 - MSI extraction on Windows
-- `.deb` / `.rpm` extraction on Linux
