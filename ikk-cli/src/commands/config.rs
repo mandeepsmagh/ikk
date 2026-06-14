@@ -5,7 +5,7 @@ use ikk_core::{config::Config, home::IkkHome};
 #[derive(Args)]
 pub struct ConfigArgs {
     #[command(subcommand)]
-    pub action: ConfigAction,
+    pub action: Option<ConfigAction>,
 }
 
 #[derive(Subcommand)]
@@ -32,8 +32,9 @@ pub struct SetArgs {
 
 pub fn run(args: ConfigArgs, home: &IkkHome) -> Result<()> {
     match args.action {
-        ConfigAction::Get(a) => run_get(a, home),
-        ConfigAction::Set(a) => run_set(a, home),
+        Some(ConfigAction::Get(a)) => run_get(a, home),
+        Some(ConfigAction::Set(a)) => run_set(a, home),
+        None => run_show_all(home),
     }
 }
 
@@ -83,5 +84,22 @@ fn run_set(args: SetArgs, home: &IkkHome) -> Result<()> {
 
     config.save(&home.config_file())?;
     println!("set {} = {}", args.key, args.value);
+    Ok(())
+}
+
+fn run_show_all(home: &IkkHome) -> Result<()> {
+    let config = Config::load(&home.config_file())?;
+
+    println!(
+        "defaults.remote               {}",
+        config.defaults.remote.as_deref().unwrap_or("(not set)")
+    );
+    println!("security.min_release_age_days {}", config.security.min_release_age_days);
+    println!("packages                      {} configured", config.packages.len());
+    if !config.remotes.is_empty() {
+        let hosts: Vec<&str> =
+            config.remotes.iter().map(|r| r.host.as_str()).collect();
+        println!("remotes                       {}", hosts.join(", "));
+    }
     Ok(())
 }

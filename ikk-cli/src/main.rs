@@ -29,7 +29,7 @@ enum Command {
     Init(init::InitArgs),
 
     /// Sync installed packages to match ikk.toml — install, upgrade, and remove as needed
-    Sync,
+    Sync(sync::SyncArgs),
 
     /// Add a package from a forge (owner/repo) or local path
     #[command(visible_alias = "install")]
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Init(args) => init::run(args, &home).await,
-        Command::Sync => sync::run(&home).await,
+        Command::Sync(args) => sync::run(args, &home).await,
         Command::Add(args) => add::run(args, &home).await,
         Command::Remove(args) => remove::run(args, &home),
         Command::Upgrade(args) => upgrade::run(args, &home).await,
