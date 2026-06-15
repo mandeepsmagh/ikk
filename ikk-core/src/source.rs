@@ -36,7 +36,7 @@ pub trait Source: Send + Sync {
 
 // ── remote source ───────────────────────────────────────────────────────────
 
-pub struct RemoteSource {
+pub(crate) struct RemoteSource {
     remote: Box<dyn Remote>,
     http: std::sync::Arc<reqwest::Client>,
     security: SecurityConfig,
@@ -119,7 +119,7 @@ impl Source for RemoteSource {
 
 // ── local source ────────────────────────────────────────────────────────────
 
-pub struct LocalSource {
+pub(crate) struct LocalSource {
     path: PathBuf,
     is_dir: bool,
     build: Option<BuildConfig>,
