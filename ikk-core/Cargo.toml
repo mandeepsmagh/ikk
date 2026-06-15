@@ -27,3 +27,6 @@ default   = []
 telemetry = []
 sandbox   = []
 sigstore  = []
+
+[dev-dependencies]
+tempfile = { workspace = true }

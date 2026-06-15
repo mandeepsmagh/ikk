@@ -106,7 +106,7 @@ impl ConfiguredRemote {
         let version = self
             .extract(json, &self.config.version_path)
             .and_then(|v| v.as_str())
-            .map(|s| s.trim_start_matches('v').to_string())
+            .map(String::from)
             .ok_or_else(|| IkkError::Store("version field not found in release response".into()))?;
 
         let prerelease = self

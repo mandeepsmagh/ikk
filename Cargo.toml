@@ -20,3 +20,4 @@ anyhow      = "1"
 dirs        = "6"
 url         = { version = "2", features = ["serde"] }
 async-trait = "0.1"
+tempfile    = "3"
