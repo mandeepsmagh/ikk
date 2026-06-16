@@ -156,9 +156,10 @@ fn extract_tar_archive<R: std::io::Read>(
         let mut fallback: Option<(PathBuf, u32)> = None;
         find_exe_in_dir(&tmp_dir, &mut fallback)?;
         if let Some((path, s)) = fallback
-            && best.as_ref().is_none_or(|(_, bs)| s > *bs) {
-                best = Some((path, s));
-            }
+            && best.as_ref().is_none_or(|(_, bs)| s > *bs)
+        {
+            best = Some((path, s));
+        }
     }
 
     if let Some((found_path, _)) = best {
@@ -215,9 +216,10 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
         let mut fallback: Option<(PathBuf, u32)> = None;
         find_exe_in_dir(&tmp_dir, &mut fallback)?;
         if let Some((path, s)) = fallback
-            && best.as_ref().is_none_or(|(_, bs)| s > *bs) {
-                best = Some((path, s));
-            }
+            && best.as_ref().is_none_or(|(_, bs)| s > *bs)
+        {
+            best = Some((path, s));
+        }
     }
 
     if let Some((found_path, _)) = best {

@@ -31,5 +31,10 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Test
+      - name: Unit tests
         run: cargo test --release
+
+      - name: Integration tests
+        run: cargo test --release -- --include-ignored
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
