@@ -9,8 +9,8 @@ use ikk_core::{
 };
 use std::path::PathBuf;
 
-fn setup() -> (PathBuf, IkkHome, Config, Store, LockFile, Platform) {
-    let dir = std::env::temp_dir().join("ikk_ci_test");
+fn setup(name: &str) -> (PathBuf, IkkHome, Config, Store, LockFile, Platform) {
+    let dir = std::env::temp_dir().join(format!("ikk_ci_{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     let home = IkkHome::new(dir.join(".ikk"));
     home.init_dirs().unwrap();
@@ -41,7 +41,7 @@ fn make_req<'a>(
 #[tokio::test]
 #[ignore = "requires GitHub API"]
 async fn pinned_with_binary() {
-    let (dir, home, config, store, mut lock, platform) = setup();
+    let (dir, home, config, store, mut lock, platform) = setup("pinned");
     let pkg = PackageConfig {
         source: "BurntSushi/ripgrep".into(),
         version: "14.1.1".into(),
@@ -69,7 +69,7 @@ async fn pinned_with_binary() {
 #[tokio::test]
 #[ignore = "requires GitHub API"]
 async fn latest_with_binary() {
-    let (dir, home, config, store, mut lock, platform) = setup();
+    let (dir, home, config, store, mut lock, platform) = setup("latest");
     let pkg = PackageConfig {
         source: "BurntSushi/ripgrep".into(),
         version: "latest".into(),
@@ -97,7 +97,7 @@ async fn latest_with_binary() {
 #[tokio::test]
 #[ignore = "requires GitHub API"]
 async fn auto_detect_binary() {
-    let (dir, home, config, store, mut lock, platform) = setup();
+    let (dir, home, config, store, mut lock, platform) = setup("auto");
     // fd's binary is also called "fd" — tests the no-flag path works
     let pkg = PackageConfig {
         source: "sharkdp/fd".into(),
@@ -127,7 +127,7 @@ async fn auto_detect_binary() {
 #[tokio::test]
 #[ignore = "requires GitHub API"]
 async fn sync_two_packages() {
-    let (dir, home, mut config, store, mut lock, platform) = setup();
+    let (dir, home, mut config, store, mut lock, platform) = setup("sync");
 
     config.packages.insert(
         "ripgrep".into(),
