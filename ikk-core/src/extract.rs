@@ -152,14 +152,13 @@ fn extract_tar_archive<R: std::io::Read>(
     find_best_in_dir(&tmp_dir, binary_name, &mut best)?;
 
     // fallback: if no strong match, pick any file that looks like a binary
-    if best.as_ref().map_or(true, |(_, s)| *s <= 10) {
+    if best.as_ref().is_none_or(|(_, s)| *s <= 10) {
         let mut fallback: Option<(PathBuf, u32)> = None;
         find_exe_in_dir(&tmp_dir, &mut fallback)?;
-        if let Some((path, s)) = fallback {
-            if best.as_ref().map_or(true, |(_, bs)| s > *bs) {
+        if let Some((path, s)) = fallback
+            && best.as_ref().is_none_or(|(_, bs)| s > *bs) {
                 best = Some((path, s));
             }
-        }
     }
 
     if let Some((found_path, _)) = best {
@@ -212,14 +211,13 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
     }
 
     // fallback: if no strong name match, pick any file that looks like a binary
-    if best.as_ref().map_or(true, |(_, s)| *s <= 10) {
+    if best.as_ref().is_none_or(|(_, s)| *s <= 10) {
         let mut fallback: Option<(PathBuf, u32)> = None;
         find_exe_in_dir(&tmp_dir, &mut fallback)?;
-        if let Some((path, s)) = fallback {
-            if best.as_ref().map_or(true, |(_, bs)| s > *bs) {
+        if let Some((path, s)) = fallback
+            && best.as_ref().is_none_or(|(_, bs)| s > *bs) {
                 best = Some((path, s));
             }
-        }
     }
 
     if let Some((found_path, _)) = best {
@@ -377,4 +375,74 @@ fn set_executable(_path: &Path) -> Result<()> {
         std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a tar.gz in memory with the given files.
+    fn tar_gz_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, data) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o755);
+            ar.append_data(&mut h, name, *data).unwrap();
+        }
+        let tar = ar.into_inner().unwrap();
+
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        gz.write_all(&tar).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn extracts_exact_name_match() {
+        let bytes = tar_gz_with_files(&[("rg", b"binary")]);
+        let dir = std::env::temp_dir().join("ikk_test_exact");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = extract(&bytes, "ripgrep.tar.gz", "rg", &dir);
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap(), "rg");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto_detects_when_name_differs() {
+        // neovim archive contains nvim, user didn't specify --binary
+        let bytes =
+            tar_gz_with_files(&[("share/nvim/runtime/file", b"data"), ("bin/nvim", b"binary")]);
+        let dir = std::env::temp_dir().join("ikk_test_autodetect");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = extract(&bytes, "nvim-linux.tar.gz", "neovim", &dir);
+        assert!(result.is_ok(), "should auto-detect nvim: {:?}", result.err());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap(), "nvim");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_data_files_for_binary() {
+        // nvim archive has an .ico file — should NOT pick it over the binary
+        let bytes = tar_gz_with_files(&[("nvim-icon.ico", b"icon"), ("bin/nvim", b"binary")]);
+        let dir = std::env::temp_dir().join("ikk_test_no_icon");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = extract(&bytes, "nvim-linux.tar.gz", "nvim", &dir);
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap(), "nvim");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
