@@ -111,11 +111,11 @@ fn extract_tar_archive<R: std::io::Read>(
     stage_dir: &Path,
 ) -> Result<PathBuf> {
     let mut archive = tar::Archive::new(reader);
-    
+
     // Create a temporary directory for unpacking to avoid "greedy matching" issues
     let tmp_dir = stage_dir.join("tmp_extract");
     std::fs::create_dir_all(&tmp_dir)?;
-    
+
     // Ensure tmp_dir is cleaned up
     struct Cleanup(PathBuf);
     impl Drop for Cleanup {
@@ -135,7 +135,7 @@ fn extract_tar_archive<R: std::io::Read>(
         for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
             let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 find_best_in_dir(&path, target, best)?;
             } else {
@@ -150,6 +150,17 @@ fn extract_tar_archive<R: std::io::Read>(
     }
 
     find_best_in_dir(&tmp_dir, binary_name, &mut best)?;
+
+    // fallback: if no strong match, pick any file that looks like a binary
+    if best.as_ref().map_or(true, |(_, s)| *s <= 10) {
+        let mut fallback: Option<(PathBuf, u32)> = None;
+        find_exe_in_dir(&tmp_dir, &mut fallback)?;
+        if let Some((path, s)) = fallback {
+            if best.as_ref().map_or(true, |(_, bs)| s > *bs) {
+                best = Some((path, s));
+            }
+        }
+    }
 
     if let Some((found_path, _)) = best {
         let out = stage_dir.join(found_path.file_name().unwrap());
@@ -166,10 +177,10 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
 
     let cursor = std::io::Cursor::new(bytes);
     let mut arc = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
-    
+
     let tmp_dir = stage_dir.join("tmp_zip");
     std::fs::create_dir_all(&tmp_dir)?;
-    
+
     struct Cleanup(PathBuf);
     impl Drop for Cleanup {
         fn drop(&mut self) {
@@ -193,9 +204,20 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
         if file.is_file() {
             let mut f = std::fs::File::create(&out_path)?;
             std::io::copy(&mut file, &mut f)?;
-            
+
             if score > best.as_ref().map_or(0, |(_, s)| *s) {
                 best = Some((out_path, score));
+            }
+        }
+    }
+
+    // fallback: if no strong name match, pick any file that looks like a binary
+    if best.as_ref().map_or(true, |(_, s)| *s <= 10) {
+        let mut fallback: Option<(PathBuf, u32)> = None;
+        find_exe_in_dir(&tmp_dir, &mut fallback)?;
+        if let Some((path, s)) = fallback {
+            if best.as_ref().map_or(true, |(_, bs)| s > *bs) {
+                best = Some((path, s));
             }
         }
     }
@@ -305,6 +327,47 @@ fn name_match_score(filename: &str, binary_name: &str) -> u32 {
         return 10;
     }
     0
+}
+
+/// Score how likely a file is to be a binary (not data). Higher = more binary-like.
+fn exe_score(filename: &str) -> u32 {
+    let f = filename.to_lowercase();
+    // data files — reject
+    for ext in [
+        "ico", "png", "jpg", "svg", "txt", "md", "json", "toml", "yaml", "yml", "xml", "html",
+        "css", "js", "ts",
+    ] {
+        if f.ends_with(ext) {
+            return 0;
+        }
+    }
+    // common binary extensions
+    if f.ends_with(".exe") {
+        return 90;
+    }
+    // file with no extension is likely a binary
+    if !f.contains('.') {
+        return 80;
+    }
+    50
+}
+
+/// Recursive search for the most binary-like file.
+fn find_exe_in_dir(dir: &Path, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            find_exe_in_dir(&path, best)?;
+        } else {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let s = exe_score(filename);
+            if s > best.as_ref().map_or(0, |(_, b)| *b) {
+                *best = Some((path, s));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn set_executable(_path: &Path) -> Result<()> {
