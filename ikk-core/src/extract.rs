@@ -111,25 +111,54 @@ fn extract_tar_archive<R: std::io::Read>(
     stage_dir: &Path,
 ) -> Result<PathBuf> {
     let mut archive = tar::Archive::new(reader);
-    let mut best: Option<(PathBuf, u32)> = None;
-
-    for entry in archive.entries().map_err(|e| IkkError::Store(e.to_string()))? {
-        let mut entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path().map_err(|e| IkkError::Store(e.to_string()))?;
-
-        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-
-        let score = name_match_score(&filename, binary_name);
-        if score > best.as_ref().map_or(0, |(_, s)| *s) {
-            let out = stage_dir.join(&filename);
-            entry.unpack(&out).map_err(|e| IkkError::Store(e.to_string()))?;
-            set_executable(&out)?;
-            best = Some((out, score));
+    
+    // Create a temporary directory for unpacking to avoid "greedy matching" issues
+    let tmp_dir = stage_dir.join("tmp_extract");
+    std::fs::create_dir_all(&tmp_dir)?;
+    
+    // Ensure tmp_dir is cleaned up
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
+    let _cleanup = Cleanup(tmp_dir.clone());
 
-    best.map(|(p, _)| p)
-        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in archive")))
+    archive.unpack(&tmp_dir).map_err(|e| IkkError::Store(e.to_string()))?;
+
+    // Now search for the best match in the unpacked directory
+    let mut best: Option<(PathBuf, u32)> = None;
+
+    // We use a recursive search to find the binary
+    fn find_best_in_dir(dir: &Path, target: &str, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
+        for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+            let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                find_best_in_dir(&path, target, best)?;
+            } else {
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let score = name_match_score(filename, target);
+                if score > best.as_ref().map_or(0, |(_, s)| *s) {
+                    *best = Some((path, score));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    find_best_in_dir(&tmp_dir, binary_name, &mut best)?;
+
+    if let Some((found_path, _)) = best {
+        let out = stage_dir.join(found_path.file_name().unwrap());
+        std::fs::rename(found_path, &out)?;
+        set_executable(&out)?;
+        Ok(out)
+    } else {
+        Err(IkkError::Store(format!("binary '{binary_name}' not found in archive")))
+    }
 }
 
 fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<PathBuf> {
@@ -137,24 +166,48 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
 
     let cursor = std::io::Cursor::new(bytes);
     let mut arc = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
+    
+    let tmp_dir = stage_dir.join("tmp_zip");
+    std::fs::create_dir_all(&tmp_dir)?;
+    
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(tmp_dir.clone());
+
     let mut best: Option<(PathBuf, u32)> = None;
 
     for i in 0..arc.len() {
         let mut file = arc.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
-        let filename = file.name().split('/').next_back().unwrap_or("").to_string();
-        let score = name_match_score(&filename, binary_name);
+        let filename = file.name().split('/').next_back().unwrap_or("");
+        let score = name_match_score(filename, binary_name);
 
-        if score > best.as_ref().map_or(0, |(_, s)| *s) {
-            let out = stage_dir.join(&filename);
-            let mut f = std::fs::File::create(&out)?;
+        let out_path = tmp_dir.join(file.name());
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        if file.is_file() {
+            let mut f = std::fs::File::create(&out_path)?;
             std::io::copy(&mut file, &mut f)?;
-            set_executable(&out)?;
-            best = Some((out, score));
+            
+            if score > best.as_ref().map_or(0, |(_, s)| *s) {
+                best = Some((out_path, score));
+            }
         }
     }
 
-    best.map(|(p, _)| p)
-        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in zip")))
+    if let Some((found_path, _)) = best {
+        let out = stage_dir.join(found_path.file_name().unwrap());
+        std::fs::rename(found_path, &out)?;
+        set_executable(&out)?;
+        Ok(out)
+    } else {
+        Err(IkkError::Store(format!("binary '{binary_name}' not found in zip")))
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -254,11 +307,11 @@ fn name_match_score(filename: &str, binary_name: &str) -> u32 {
     0
 }
 
-fn set_executable(path: &Path) -> Result<()> {
+fn set_executable(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
 }
