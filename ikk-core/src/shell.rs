@@ -18,18 +18,21 @@ impl Shell {
             return Shell::PowerShell;
         }
 
-        std::env::var("SHELL")
-            .ok()
-            .as_deref()
-            .and_then(|s| s.rsplit('/').next().map(String::from))
-            .map(|name| match name.as_str() {
-                "zsh" => Shell::Zsh,
-                "bash" => Shell::Bash,
-                "fish" => Shell::Fish,
-                "nu" => Shell::Nushell,
-                other => Shell::Unknown(other.to_string()),
-            })
-            .unwrap_or(Shell::Bash)
+        #[cfg(not(windows))]
+        {
+            let shell_env = std::env::var("SHELL").ok();
+            if let Some(shell_name) = shell_env.as_deref().and_then(|s| s.rsplit('/').next()) {
+                match shell_name {
+                    "zsh" => Shell::Zsh,
+                    "bash" => Shell::Bash,
+                    "fish" => Shell::Fish,
+                    "nu" => Shell::Nushell,
+                    other => Shell::Unknown(other.to_string()),
+                }
+            } else {
+                Shell::Bash
+            }
+        }
     }
 
     pub fn rc_file(&self) -> Option<PathBuf> {

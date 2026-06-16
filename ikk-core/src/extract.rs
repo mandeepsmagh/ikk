@@ -111,25 +111,64 @@ fn extract_tar_archive<R: std::io::Read>(
     stage_dir: &Path,
 ) -> Result<PathBuf> {
     let mut archive = tar::Archive::new(reader);
-    let mut best: Option<(PathBuf, u32)> = None;
 
-    for entry in archive.entries().map_err(|e| IkkError::Store(e.to_string()))? {
-        let mut entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path().map_err(|e| IkkError::Store(e.to_string()))?;
+    // Create a temporary directory for unpacking to avoid "greedy matching" issues
+    let tmp_dir = stage_dir.join("tmp_extract");
+    std::fs::create_dir_all(&tmp_dir)?;
 
-        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-
-        let score = name_match_score(&filename, binary_name);
-        if score > best.as_ref().map_or(0, |(_, s)| *s) {
-            let out = stage_dir.join(&filename);
-            entry.unpack(&out).map_err(|e| IkkError::Store(e.to_string()))?;
-            set_executable(&out)?;
-            best = Some((out, score));
+    // Ensure tmp_dir is cleaned up
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
+    let _cleanup = Cleanup(tmp_dir.clone());
 
-    best.map(|(p, _)| p)
-        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in archive")))
+    archive.unpack(&tmp_dir).map_err(|e| IkkError::Store(e.to_string()))?;
+
+    // Now search for the best match in the unpacked directory
+    let mut best: Option<(PathBuf, u32)> = None;
+
+    // We use a recursive search to find the binary
+    fn find_best_in_dir(dir: &Path, target: &str, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
+        for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+            let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                find_best_in_dir(&path, target, best)?;
+            } else {
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let score = name_match_score(filename, target);
+                if score > best.as_ref().map_or(0, |(_, s)| *s) {
+                    *best = Some((path, score));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    find_best_in_dir(&tmp_dir, binary_name, &mut best)?;
+
+    // fallback: if no strong match, pick any file that looks like a binary
+    if best.as_ref().is_none_or(|(_, s)| *s <= 10) {
+        let mut fallback: Option<(PathBuf, u32)> = None;
+        find_exe_in_dir(&tmp_dir, &mut fallback)?;
+        if let Some((path, s)) = fallback
+            && best.as_ref().is_none_or(|(_, bs)| s > *bs) {
+                best = Some((path, s));
+            }
+    }
+
+    if let Some((found_path, _)) = best {
+        let out = stage_dir.join(found_path.file_name().unwrap());
+        std::fs::rename(found_path, &out)?;
+        set_executable(&out)?;
+        Ok(out)
+    } else {
+        Err(IkkError::Store(format!("binary '{binary_name}' not found in archive")))
+    }
 }
 
 fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<PathBuf> {
@@ -137,24 +176,58 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
 
     let cursor = std::io::Cursor::new(bytes);
     let mut arc = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
+
+    let tmp_dir = stage_dir.join("tmp_zip");
+    std::fs::create_dir_all(&tmp_dir)?;
+
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(tmp_dir.clone());
+
     let mut best: Option<(PathBuf, u32)> = None;
 
     for i in 0..arc.len() {
         let mut file = arc.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
-        let filename = file.name().split('/').next_back().unwrap_or("").to_string();
-        let score = name_match_score(&filename, binary_name);
+        let filename = file.name().split('/').next_back().unwrap_or("");
+        let score = name_match_score(filename, binary_name);
 
-        if score > best.as_ref().map_or(0, |(_, s)| *s) {
-            let out = stage_dir.join(&filename);
-            let mut f = std::fs::File::create(&out)?;
+        let out_path = tmp_dir.join(file.name());
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        if file.is_file() {
+            let mut f = std::fs::File::create(&out_path)?;
             std::io::copy(&mut file, &mut f)?;
-            set_executable(&out)?;
-            best = Some((out, score));
+
+            if score > best.as_ref().map_or(0, |(_, s)| *s) {
+                best = Some((out_path, score));
+            }
         }
     }
 
-    best.map(|(p, _)| p)
-        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in zip")))
+    // fallback: if no strong name match, pick any file that looks like a binary
+    if best.as_ref().is_none_or(|(_, s)| *s <= 10) {
+        let mut fallback: Option<(PathBuf, u32)> = None;
+        find_exe_in_dir(&tmp_dir, &mut fallback)?;
+        if let Some((path, s)) = fallback
+            && best.as_ref().is_none_or(|(_, bs)| s > *bs) {
+                best = Some((path, s));
+            }
+    }
+
+    if let Some((found_path, _)) = best {
+        let out = stage_dir.join(found_path.file_name().unwrap());
+        std::fs::rename(found_path, &out)?;
+        set_executable(&out)?;
+        Ok(out)
+    } else {
+        Err(IkkError::Store(format!("binary '{binary_name}' not found in zip")))
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -254,11 +327,122 @@ fn name_match_score(filename: &str, binary_name: &str) -> u32 {
     0
 }
 
-fn set_executable(path: &Path) -> Result<()> {
+/// Score how likely a file is to be a binary (not data). Higher = more binary-like.
+fn exe_score(filename: &str) -> u32 {
+    let f = filename.to_lowercase();
+    // data files — reject
+    for ext in [
+        "ico", "png", "jpg", "svg", "txt", "md", "json", "toml", "yaml", "yml", "xml", "html",
+        "css", "js", "ts",
+    ] {
+        if f.ends_with(ext) {
+            return 0;
+        }
+    }
+    // common binary extensions
+    if f.ends_with(".exe") {
+        return 90;
+    }
+    // file with no extension is likely a binary
+    if !f.contains('.') {
+        return 80;
+    }
+    50
+}
+
+/// Recursive search for the most binary-like file.
+fn find_exe_in_dir(dir: &Path, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            find_exe_in_dir(&path, best)?;
+        } else {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let s = exe_score(filename);
+            if s > best.as_ref().map_or(0, |(_, b)| *b) {
+                *best = Some((path, s));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set_executable(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a tar.gz in memory with the given files.
+    fn tar_gz_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, data) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o755);
+            ar.append_data(&mut h, name, *data).unwrap();
+        }
+        let tar = ar.into_inner().unwrap();
+
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        gz.write_all(&tar).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn extracts_exact_name_match() {
+        let bytes = tar_gz_with_files(&[("rg", b"binary")]);
+        let dir = std::env::temp_dir().join("ikk_test_exact");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = extract(&bytes, "ripgrep.tar.gz", "rg", &dir);
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap(), "rg");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto_detects_when_name_differs() {
+        // neovim archive contains nvim, user didn't specify --binary
+        let bytes =
+            tar_gz_with_files(&[("share/nvim/runtime/file", b"data"), ("bin/nvim", b"binary")]);
+        let dir = std::env::temp_dir().join("ikk_test_autodetect");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = extract(&bytes, "nvim-linux.tar.gz", "neovim", &dir);
+        assert!(result.is_ok(), "should auto-detect nvim: {:?}", result.err());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap(), "nvim");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_data_files_for_binary() {
+        // nvim archive has an .ico file — should NOT pick it over the binary
+        let bytes = tar_gz_with_files(&[("nvim-icon.ico", b"icon"), ("bin/nvim", b"binary")]);
+        let dir = std::env::temp_dir().join("ikk_test_no_icon");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = extract(&bytes, "nvim-linux.tar.gz", "nvim", &dir);
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap(), "nvim");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

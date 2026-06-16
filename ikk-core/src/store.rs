@@ -126,7 +126,6 @@ impl Store {
 
         // seal — read + execute only
         seal(&binary_path)?;
-        seal_dir(&entry)?;
 
         tracing::info!("stored {}@{} ({})", name, version, &binary_hash[..12]);
 
@@ -203,38 +202,29 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn seal(path: &Path) -> Result<()> {
+fn seal(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555))?;
     }
     Ok(())
 }
 
-fn seal_dir(path: &Path) -> Result<()> {
+fn unseal(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
 }
 
-fn unseal(path: &Path) -> Result<()> {
+fn unseal_dir(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-    }
-    Ok(())
-}
-
-fn unseal_dir(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
 }
