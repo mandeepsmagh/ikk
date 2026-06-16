@@ -252,4 +252,43 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
+
+    #[test]
+    fn insert_is_idempotent() {
+        let dir = std::env::temp_dir().join("ikk_test_idem");
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(dir.clone()).unwrap();
+
+        let sp1 = store.insert("test", "1.0", b"binary", "url", "abc").unwrap();
+        let sp2 = store.insert("test", "1.0", b"binary", "url", "abc").unwrap();
+        assert_eq!(sp1.hash, sp2.hash);
+        assert_eq!(sp1.path, sp2.path);
+
+        let sp3 = store.insert("test", "1.0", b"different", "url", "def").unwrap();
+        assert_ne!(sp1.hash, sp3.hash);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_all_detects_tamper() {
+        let dir = std::env::temp_dir().join("ikk_test_tamper");
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(dir.clone()).unwrap();
+
+        let sp = store.insert("test", "1.0", b"original", "url", "abc").unwrap();
+
+        // unseal first — binary is sealed 555 after insert
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&sp.binary, std::fs::Permissions::from_mode(0o755));
+        }
+        std::fs::write(&sp.binary, b"tampered").unwrap();
+
+        let results = store.verify_all().unwrap();
+        assert!(matches!(results[0], VerifyResult::Tampered { .. }));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
