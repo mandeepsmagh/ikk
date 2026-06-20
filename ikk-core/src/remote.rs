@@ -65,10 +65,7 @@ impl ConfiguredRemote {
     /// Create a remote handler. Reads the auth token from the environment
     /// at construction time (env vars don't change during a process lifetime).
     pub fn new(config: RemoteConfig, owner: String, repo: String, http: reqwest::Client) -> Self {
-        let auth_token = config
-            .auth_env
-            .as_ref()
-            .and_then(|env_var| std::env::var(env_var).ok());
+        let auth_token = config.auth_env.as_ref().and_then(|env_var| std::env::var(env_var).ok());
         Self { config, owner, repo, http, auth_token }
     }
 
@@ -127,9 +124,8 @@ fn parse_release(config: &RemoteConfig, json: &Value, host: &str) -> Result<Rele
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
-    let draft = extract(json, &config.draft_path)
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    let draft =
+        extract(json, &config.draft_path).and_then(serde_json::Value::as_bool).unwrap_or(false);
 
     let published_at = config
         .published_at_path
@@ -155,12 +151,10 @@ fn parse_assets(config: &RemoteConfig, json: &Value) -> Vec<Asset> {
     items
         .iter()
         .filter_map(|a| {
-            let name = extract(a, &config.asset_name_path)
-                .and_then(|v| v.as_str())
-                .map(String::from)?;
-            let url = extract(a, &config.asset_url_path)
-                .and_then(|v| v.as_str())
-                .map(String::from)?;
+            let name =
+                extract(a, &config.asset_name_path).and_then(|v| v.as_str()).map(String::from)?;
+            let url =
+                extract(a, &config.asset_url_path).and_then(|v| v.as_str()).map(String::from)?;
             Some(Asset { name, url })
         })
         .collect()
