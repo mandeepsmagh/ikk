@@ -40,6 +40,8 @@ impl Ctx {
 
         let http = reqwest::Client::builder()
             .user_agent(format!("ikk/{}", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(300))
             .build()?;
 
         Ok(Self { home: home.clone(), config, lock, store, platform, registry, http })
