@@ -33,7 +33,9 @@ pub enum IkkError {
     )]
     ReleaseTooRecent { name: String, version: String, age_days: u64, min_days: u64 },
 
-    #[error("version required for URL template mode — URI contains {{version}} but no version specified")]
+    #[error(
+        "version required for URL template mode — URI contains {{version}} but no version specified"
+    )]
     VersionRequiredForTemplate,
 
     #[error("store error: {0}")]

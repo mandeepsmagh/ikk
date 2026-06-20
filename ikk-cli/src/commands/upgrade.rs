@@ -58,7 +58,15 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
                     home: &ctx.home,
                 };
 
-                ops::install(&req, &*remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock).await?;
+                ops::install(
+                    &req,
+                    &*remote,
+                    &ctx.http,
+                    &ctx.config.security,
+                    &ctx.store,
+                    &mut ctx.lock,
+                )
+                .await?;
             }
             ikk_core::config::PackageMode::UrlTemplate => {
                 let req = ops::InstallRequest {
@@ -71,9 +79,17 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
 
                 ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await?;
             }
-            _ => {
-                println!("  {name}: upgrade only supported for forge and template packages");
-                continue;
+            ikk_core::config::PackageMode::LocalBinary
+            | ikk_core::config::PackageMode::LocalBuild => {
+                let req = ops::InstallRequest {
+                    name,
+                    pkg: &pkg,
+                    config: &ctx.config,
+                    platform: &ctx.platform,
+                    home: &ctx.home,
+                };
+
+                ops::install_local(&req, &ctx.store, &mut ctx.lock)?;
             }
         }
 

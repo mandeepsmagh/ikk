@@ -21,11 +21,7 @@ pub fn run(args: GcArgs, home: &IkkHome) -> Result<()> {
         let entry_name = entry.file_name().to_string_lossy().to_string();
 
         // Check if any locked package references this entry
-        let in_use = ctx
-            .lock
-            .packages
-            .values()
-            .any(|p| p.bin_entry == entry_name);
+        let in_use = ctx.lock.packages.values().any(|p| p.bin_entry == entry_name);
 
         if in_use {
             kept += 1;
@@ -36,10 +32,8 @@ pub fn run(args: GcArgs, home: &IkkHome) -> Result<()> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    entry.path(),
-                    std::fs::Permissions::from_mode(0o755),
-                );
+                let _ =
+                    std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o755));
             }
             std::fs::remove_dir_all(entry.path())?;
             println!("  removed {}", entry.path().display());

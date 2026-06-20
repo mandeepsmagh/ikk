@@ -189,16 +189,16 @@ Stage 2 — URL Template Mode
 [x] 2.5   Test: URL template
 
 Stage 3 — Local Modes + Variants
-[ ] 3.1   Local binary mode
-[ ] 3.2   Local build mode
-[ ] 3.3   Build error handling
-[ ] 3.4   Build output discovery
-[ ] 3.5   variant in PackageConfig
-[ ] 3.6   {variant} in URL template
-[ ] 3.7   Variant in store naming
-[ ] 3.8   Variant in lock file
-[ ] 3.9   ikk install --variant
-[ ] 3.10  Multiple variants
+[x] 3.1   Local binary mode
+[x] 3.2   Local build mode
+[x] 3.3   Build error handling
+[x] 3.4   Build output discovery
+[x] 3.5   variant in PackageConfig
+[x] 3.6   {variant} in URL template
+[x] 3.7   Variant in store naming
+[x] 3.8   Variant in lock file
+[x] 3.9   ikk install --variant
+[x] 3.10  Multiple variants
 [ ] 3.11  Test: local binary
 [ ] 3.12  Test: local build
 [ ] 3.13  Test: variant switching

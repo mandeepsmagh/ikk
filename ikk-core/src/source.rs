@@ -46,7 +46,11 @@ pub(crate) struct RemoteSource {
 }
 
 impl RemoteSource {
-    pub fn new(remote: Box<dyn Remote>, http: std::sync::Arc<reqwest::Client>, security: SecurityConfig) -> Self {
+    pub fn new(
+        remote: Box<dyn Remote>,
+        http: std::sync::Arc<reqwest::Client>,
+        security: SecurityConfig,
+    ) -> Self {
         Self { remote, http, security }
     }
 }
@@ -102,15 +106,17 @@ impl Source for RemoteSource {
 
         let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
         let binary_bytes = std::fs::read(&binary_path)?;
-        let detected_name = binary_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(binary_name)
-            .to_string();
+        let detected_name =
+            binary_path.file_name().and_then(|n| n.to_str()).unwrap_or(binary_name).to_string();
 
         let _ = std::fs::remove_file(&binary_path);
 
-        Ok(FetchedBinary { binary_bytes, archive_hash, source_url: asset.url.clone(), detected_name })
+        Ok(FetchedBinary {
+            binary_bytes,
+            archive_hash,
+            source_url: asset.url.clone(),
+            detected_name,
+        })
     }
 }
 
@@ -164,11 +170,8 @@ impl Source for LocalSource {
                 binary_name,
                 stage_dir,
             )?;
-            let detected = binary_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(binary_name)
-                .to_string();
+            let detected =
+                binary_path.file_name().and_then(|n| n.to_str()).unwrap_or(binary_name).to_string();
             (std::fs::read(&binary_path)?, archive_hash, detected)
         };
 
@@ -179,7 +182,11 @@ impl Source for LocalSource {
 // ── local build ─────────────────────────────────────────────────────────────
 
 #[allow(dead_code)]
-fn build_local(dir: &Path, binary_name: &str, build: Option<&[String]>) -> Result<Vec<u8>> {
+pub(crate) fn build_local(
+    dir: &Path,
+    binary_name: &str,
+    build: Option<&[String]>,
+) -> Result<Vec<u8>> {
     use std::process::Command;
 
     let commands = build.ok_or_else(|| IkkError::BuildFailed {

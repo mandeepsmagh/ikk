@@ -64,10 +64,8 @@ fn run_set(args: SetArgs, home: &IkkHome) -> Result<()> {
             config.defaults.remote = Some(args.value.clone());
         }
         "security.min_release_age_days" => {
-            let days: u64 = args
-                .value
-                .parse()
-                .map_err(|_| anyhow::anyhow!("value must be a number"))?;
+            let days: u64 =
+                args.value.parse().map_err(|_| anyhow::anyhow!("value must be a number"))?;
             config.security.min_release_age_days = days;
         }
         _ => {

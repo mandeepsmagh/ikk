@@ -54,7 +54,11 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
         sha256: args.sha256,
     };
 
-    let mode = PackageMode::classify(&args.uri, ctx.config.defaults.remote.as_deref(), pkg.build.is_some())?;
+    let mode = PackageMode::classify(
+        &args.uri,
+        ctx.config.defaults.remote.as_deref(),
+        pkg.build.is_some(),
+    )?;
 
     match mode {
         PackageMode::ForgeDiscovery => {
@@ -69,7 +73,15 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
                 home: &ctx.home,
             };
 
-            ops::install(&req, &*remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock).await?;
+            ops::install(
+                &req,
+                &*remote,
+                &ctx.http,
+                &ctx.config.security,
+                &ctx.store,
+                &mut ctx.lock,
+            )
+            .await?;
         }
         PackageMode::UrlTemplate => {
             let req = ops::InstallRequest {
@@ -83,7 +95,15 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
             ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await?;
         }
         PackageMode::LocalBinary | PackageMode::LocalBuild => {
-            anyhow::bail!("local modes not yet implemented (Stage 3)");
+            let req = ops::InstallRequest {
+                name: &args.name,
+                pkg: &pkg,
+                config: &ctx.config,
+                platform: &ctx.platform,
+                home: &ctx.home,
+            };
+
+            ops::install_local(&req, &ctx.store, &mut ctx.lock)?;
         }
     }
 

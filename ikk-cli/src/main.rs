@@ -74,8 +74,7 @@ enum Command {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("ikk=info".parse()?),
+            tracing_subscriber::EnvFilter::from_default_env().add_directive("ikk=info".parse()?),
         )
         .without_time()
         .with_target(false)
