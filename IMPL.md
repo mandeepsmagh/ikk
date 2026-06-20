@@ -229,5 +229,5 @@ Stage 5 — Windows + Polish
 [x] 5.14  Release age guard
 [x] 5.15  ikk check
 [x] 5.16  CI
-[ ] 5.17  Colored output
+[x] 5.17  Progress bars
 ```
