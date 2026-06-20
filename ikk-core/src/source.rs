@@ -66,9 +66,7 @@ impl Source for RemoteSource {
         let release = self.remote.latest().await?;
 
         if release.prerelease || release.draft {
-            return Err(IkkError::Store(
-                "latest release is a prerelease or draft — pin a specific version".into(),
-            ));
+            return Err(IkkError::PrereleaseNotAllowed);
         }
 
         if !self.security.is_old_enough(release.published_at.as_deref()) {

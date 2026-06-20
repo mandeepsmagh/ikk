@@ -36,6 +36,9 @@ pub enum IkkError {
     #[error("version required — URI contains {{version}} but no version specified")]
     VersionRequiredForTemplate,
 
+    #[error("latest release is a prerelease or draft — pin a specific version")]
+    PrereleaseNotAllowed,
+
     // ── structured build errors ──────────────────────────────────────────────
     #[error("build step `{command}` exited with code {exit_code} (package `{name}`)")]
     BuildStepFailed { name: String, command: String, exit_code: i32 },
