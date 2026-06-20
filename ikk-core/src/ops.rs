@@ -45,11 +45,12 @@ pub async fn install(
     let version = resolve_version(name, pkg, remote, security).await?;
 
     // Already installed at this version?
-    if let Some(locked) = lock.get(name) {
-        if locked.version == version && locked.variant == pkg.variant {
-            tracing::debug!("{name} already at {version}");
-            return Ok(());
-        }
+    if let Some(locked) = lock.get(name)
+        && locked.version == version
+        && locked.variant == pkg.variant
+    {
+        tracing::debug!("{name} already at {version}");
+        return Ok(());
     }
 
     // Fetch binary
@@ -99,11 +100,12 @@ pub async fn install_template(
     let version = pkg.version.as_deref().ok_or(IkkError::VersionRequiredForTemplate)?;
 
     // Already installed?
-    if let Some(locked) = lock.get(name) {
-        if locked.version == version && locked.variant == pkg.variant {
-            tracing::debug!("{name} already at {version}");
-            return Ok(());
-        }
+    if let Some(locked) = lock.get(name)
+        && locked.version == version
+        && locked.variant == pkg.variant
+    {
+        tracing::debug!("{name} already at {version}");
+        return Ok(());
     }
 
     // Resolve URI template
@@ -149,11 +151,12 @@ pub fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFil
 
     let version = "local";
 
-    if let Some(locked) = lock.get(name) {
-        if locked.version == version && locked.variant == pkg.variant {
-            tracing::debug!("{name} already installed");
-            return Ok(());
-        }
+    if let Some(locked) = lock.get(name)
+        && locked.version == version
+        && locked.variant == pkg.variant
+    {
+        tracing::debug!("{name} already installed");
+        return Ok(());
     }
 
     let source_url = path.display().to_string();
@@ -202,10 +205,8 @@ pub fn resolve_uri_template(uri: &str, version: &str, variant: Option<&str>) -> 
         return Ok(uri.to_string());
     }
 
-    if uri.contains("{version}") {
-        if version.is_empty() {
-            return Err(IkkError::VersionRequiredForTemplate);
-        }
+    if uri.contains("{version}") && version.is_empty() {
+        return Err(IkkError::VersionRequiredForTemplate);
     }
 
     let mut resolved = uri.replace("{version}", version);
@@ -239,15 +240,15 @@ async fn fetch_template(
     let bytes = bytes.as_ref();
 
     let archive_hash = sha256_hex(bytes);
-    if let Some(expected) = &pkg.sha256 {
-        if archive_hash != *expected {
-            return Err(IkkError::HashMismatch {
-                name: name.to_string(),
-                version: version.to_string(),
-                expected: expected.clone(),
-                actual: archive_hash,
-            });
-        }
+    if let Some(expected) = &pkg.sha256
+        && archive_hash != *expected
+    {
+        return Err(IkkError::HashMismatch {
+            name: name.to_string(),
+            version: version.to_string(),
+            expected: expected.clone(),
+            actual: archive_hash,
+        });
     }
 
     let filename = download_url.rsplit('/').next().unwrap_or("download");
@@ -259,18 +260,14 @@ async fn fetch_template(
             | crate::extract::ArchiveKind::Zip
     );
 
-    if is_archive {
-        match crate::extract::extract_dir(bytes, filename, stage_dir) {
-            Ok(extracted_dir) => {
-                let bin_count = crate::extract::count_binaries(&extracted_dir).unwrap_or(0);
-                if bin_count > 1 {
-                    tracing::info!("detected multi-binary package ({} binaries)", bin_count);
-                    return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
-                }
-                let _ = std::fs::remove_dir_all(&extracted_dir);
-            }
-            _ => {}
+    if is_archive && let Ok(extracted_dir) = crate::extract::extract_dir(bytes, filename, stage_dir)
+    {
+        let bin_count = crate::extract::count_binaries(&extracted_dir).unwrap_or(0);
+        if bin_count > 1 {
+            tracing::info!("detected multi-binary package ({} binaries)", bin_count);
+            return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
         }
+        let _ = std::fs::remove_dir_all(&extracted_dir);
     }
 
     let binary_path = crate::extract::extract(bytes, filename, binary_name, stage_dir)?;
@@ -289,10 +286,10 @@ async fn resolve_version(
     security: &SecurityConfig,
 ) -> Result<String> {
     // Explicit version pinned
-    if let Some(v) = &pkg.version {
-        if v != "latest" {
-            return Ok(v.clone());
-        }
+    if let Some(v) = &pkg.version
+        && v != "latest"
+    {
+        return Ok(v.clone());
     }
 
     // Resolve "latest" via forge API
@@ -323,6 +320,7 @@ async fn resolve_version(
 
 // ── forge fetch ──────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_forge(
     name: &str,
     version: &str,
@@ -341,15 +339,15 @@ async fn fetch_forge(
     let bytes = bytes.as_ref();
 
     let archive_hash = sha256_hex(bytes);
-    if let Some(expected) = &pkg.sha256 {
-        if archive_hash != *expected {
-            return Err(IkkError::HashMismatch {
-                name: name.to_string(),
-                version: version.to_string(),
-                expected: expected.clone(),
-                actual: archive_hash,
-            });
-        }
+    if let Some(expected) = &pkg.sha256
+        && archive_hash != *expected
+    {
+        return Err(IkkError::HashMismatch {
+            name: name.to_string(),
+            version: version.to_string(),
+            expected: expected.clone(),
+            actual: archive_hash,
+        });
     }
 
     // Try full directory extraction to detect multi-binary packages
@@ -362,6 +360,7 @@ async fn fetch_forge(
     );
 
     if is_archive {
+        #[allow(clippy::single_match)]
         match crate::extract::extract_dir(bytes, &asset.name, stage_dir) {
             Ok(extracted_dir) => {
                 let bin_count = crate::extract::count_binaries(&extracted_dir).unwrap_or(0);
@@ -387,6 +386,7 @@ async fn fetch_forge(
 
 // ── commit: store → link → lock ──────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn commit(
     name: &str,
     version: &str,
@@ -479,10 +479,13 @@ fn create_file_link(src: &Path, dst: &Path) -> Result<()> {
     }
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink(src, dst)?;
+    {
+        std::os::unix::fs::symlink(src, dst)?;
+    }
 
     #[cfg(windows)]
     {
+        // Symlink if Developer Mode enabled, otherwise copy
         if std::os::windows::fs::symlink_file(src, dst).is_err() {
             std::fs::copy(src, dst)?;
         }
@@ -492,7 +495,6 @@ fn create_file_link(src: &Path, dst: &Path) -> Result<()> {
 }
 
 fn create_dir_link(src: &Path, dst: &Path) -> Result<()> {
-    // Remove existing link or dir
     if dst.exists() {
         if dst.is_dir() {
             std::fs::remove_dir_all(dst).ok();
@@ -502,14 +504,29 @@ fn create_dir_link(src: &Path, dst: &Path) -> Result<()> {
     }
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink(src, dst)?;
+    {
+        std::os::unix::fs::symlink(src, dst)?;
+    }
 
     #[cfg(windows)]
     {
-        // NTFS junction — no elevation required
+        // Symlink if available, otherwise try mklink /J (junction, no elevation)
         if std::os::windows::fs::symlink_dir(src, dst).is_err() {
-            // Fallback: copy entire dir
-            copy_dir_contents(src, dst)?;
+            let output = std::process::Command::new("cmd")
+                .args([
+                    "/C",
+                    "mklink",
+                    "/J",
+                    &dst.display().to_string(),
+                    &src.display().to_string(),
+                ])
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {}
+                _ => {
+                    crate::store::copy_dir(src, dst)?;
+                }
+            }
         }
     }
 
@@ -523,6 +540,20 @@ fn remove_bin_link(bin_dir: &Path, name: &str) -> Result<()> {
     } else if path.exists() || path.symlink_metadata().is_ok() {
         std::fs::remove_file(&path)?;
     }
+    Ok(())
+}
+
+// ── self-uninstall ────────────────────────────────────────────────────────────
+
+pub fn self_uninstall(home: &IkkHome) -> Result<()> {
+    let shell = crate::shell::Shell::detect();
+    let _ = crate::shell::remove_path_integration(&shell);
+
+    if home.root.exists() {
+        std::fs::remove_dir_all(&home.root)?;
+    }
+
+    tracing::info!("ikk uninstalled — removed {}", home.root.display());
     Ok(())
 }
 
@@ -615,7 +646,7 @@ mod tests {
 
         let locked = lock.get("mytool").unwrap();
         assert_eq!(locked.version, "local");
-        assert!(locked.bin_entry.len() > 0);
+        assert!(!locked.bin_entry.is_empty());
         assert!(!locked.is_dir);
 
         // Verify symlink exists
@@ -664,7 +695,7 @@ mod tests {
 
         let locked = lock.get("mytool").unwrap();
         assert_eq!(locked.version, "local");
-        assert!(locked.bin_entry.len() > 0);
+        assert!(!locked.bin_entry.is_empty());
         assert!(locked.is_dir);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -750,18 +781,4 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-// ── self-uninstall ────────────────────────────────────────────────────────────
-
-pub fn self_uninstall(home: &IkkHome) -> Result<()> {
-    let shell = crate::shell::Shell::detect();
-    let _ = crate::shell::remove_path_integration(&shell);
-
-    if home.root.exists() {
-        std::fs::remove_dir_all(&home.root)?;
-    }
-
-    tracing::info!("ikk uninstalled — removed {}", home.root.display());
-    Ok(())
 }
