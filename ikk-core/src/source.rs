@@ -45,6 +45,7 @@ pub(crate) struct RemoteSource {
     security: SecurityConfig,
 }
 
+#[allow(dead_code)]
 impl RemoteSource {
     pub fn new(
         remote: Box<dyn Remote>,
@@ -129,6 +130,7 @@ pub(crate) struct LocalSource {
     build: Option<Vec<String>>,
 }
 
+#[allow(dead_code)]
 impl LocalSource {
     pub fn new(path: PathBuf, is_dir: bool, build: Option<Vec<String>>) -> Self {
         Self { path, is_dir, build }

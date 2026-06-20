@@ -213,21 +213,21 @@ Stage 4 — Multi-File Packages + ikk run
 [ ] 4.7   Test: multi-binary
 
 Stage 5 — Windows + Polish
-[ ] 5.1   .bat shim
-[ ] 5.2   NTFS junction
-[ ] 5.3   .exe handling
-[ ] 5.4   Platform-conditional linking
-[ ] 5.5   ikk sync
-[ ] 5.6   ikk upgrade
-[ ] 5.7   ikk remove
-[ ] 5.8   ikk init
-[ ] 5.9   ikk uninstall
-[ ] 5.10  ikk config
-[ ] 5.11  ikk self-update
-[ ] 5.12  ikk gc
-[ ] 5.13  ikk info
-[ ] 5.14  Release age guard
-[ ] 5.15  ikk check
-[ ] 5.16  Colored output
-[ ] 5.17  CI
+[x] 5.1   Windows file link (symlink + copy fallback)
+[x] 5.2   Windows dir link (symlink + mklink /J + copy fallback)
+[x] 5.3   .exe handling
+[x] 5.4   Platform-conditional linking
+[x] 5.5   ikk sync
+[x] 5.6   ikk upgrade
+[x] 5.7   ikk remove
+[x] 5.8   ikk init
+[x] 5.9   ikk uninstall
+[x] 5.10  ikk config
+[x] 5.11  ikk self-update
+[x] 5.12  ikk gc
+[x] 5.13  ikk info
+[x] 5.14  Release age guard
+[x] 5.15  ikk check
+[x] 5.16  CI
+[ ] 5.17  Colored output
 ```

@@ -257,12 +257,12 @@ impl Store {
         if entry.exists() {
             unseal_dir(&entry)?;
             // Find and unseal the binary inside
-            if let Ok(meta_toml) = std::fs::read_to_string(entry.join("meta.toml")) {
-                if let Ok(meta) = toml::from_str::<StoreMeta>(&meta_toml) {
-                    let bin = entry.join("bin").join(&meta.name);
-                    if bin.exists() {
-                        let _ = unseal(&bin);
-                    }
+            if let Ok(meta_toml) = std::fs::read_to_string(entry.join("meta.toml"))
+                && let Ok(meta) = toml::from_str::<StoreMeta>(&meta_toml)
+            {
+                let bin = entry.join("bin").join(&meta.name);
+                if bin.exists() {
+                    let _ = unseal(&bin);
                 }
             }
             std::fs::remove_dir_all(&entry)?;
@@ -324,6 +324,11 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// Copy a directory tree recursively. Public for Windows fallback use.
+pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+    copy_dir_contents(src, dst)
+}
+
 /// Compute a deterministic hash of a directory's contents.
 fn hash_dir(dir: &Path) -> Result<String> {
     let mut hasher = Sha256::new();
@@ -340,7 +345,7 @@ fn hash_dir(dir: &Path) -> Result<String> {
             hasher.update(hash_dir(path)?.as_bytes());
         } else {
             let bytes = std::fs::read(path)?;
-            hasher.update(&sha256_hex(&bytes).as_bytes());
+            hasher.update(sha256_hex(&bytes).as_bytes());
         }
     }
     Ok(hex::encode(hasher.finalize()))
