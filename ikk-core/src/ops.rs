@@ -264,17 +264,18 @@ async fn fetch_template(
         let extracted_dir = crate::extract::extract_dir(bytes, filename, stage_dir)?;
         let binaries = crate::extract::list_binaries(&extracted_dir)?;
 
-        if binaries.len() > 1 {
-            tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
-            return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
+        match binaries.as_slice() {
+            [binary] => {
+                let binary_bytes = std::fs::read(binary)?;
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+                return Ok((binary_bytes, archive_hash, download_url.to_string(), false));
+            }
+            [] => {}
+            _ => {
+                tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
+                return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
+            }
         }
-
-        if binaries.len() == 1 {
-            let binary_bytes = std::fs::read(&binaries[0])?;
-            let _ = std::fs::remove_dir_all(&extracted_dir);
-            return Ok((binary_bytes, archive_hash, download_url.to_string(), false));
-        }
-
         let _ = std::fs::remove_dir_all(&extracted_dir);
     }
 
@@ -371,21 +372,22 @@ async fn fetch_forge(
         let extracted_dir = crate::extract::extract_dir(bytes, &asset.name, stage_dir)?;
         let binaries = crate::extract::list_binaries(&extracted_dir)?;
 
-        if binaries.len() > 1 {
-            // Multi-binary package — store full directory tree
-            tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
-            return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
+        match binaries.as_slice() {
+            [binary] => {
+                // Exactly one binary — read it directly
+                let binary_bytes = std::fs::read(binary)?;
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+                return Ok((binary_bytes, archive_hash, asset.url.clone(), false));
+            }
+            [] => {
+                // No binaries found — fall through to raw extraction
+            }
+            _ => {
+                // Multiple binaries — store full directory tree
+                tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
+                return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
+            }
         }
-
-        if binaries.len() == 1 {
-            // Single binary — read it directly, no scoring needed
-            let binary_bytes = std::fs::read(&binaries[0])?;
-            let _ = std::fs::remove_dir_all(&extracted_dir);
-            return Ok((binary_bytes, archive_hash, asset.url.clone(), false));
-        }
-
-        // No binaries found — clean up and fall through to single extract as
-        // last resort (handles raw binaries, AppImages, etc.)
         let _ = std::fs::remove_dir_all(&extracted_dir);
     }
 
