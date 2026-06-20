@@ -388,7 +388,7 @@ fn set_executable_recursive(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-#[expect(clippy::used_underscore_binding)]
+#[cfg_attr(unix, expect(clippy::used_underscore_binding))]
 fn seal(_path: &Path) {
     #[cfg(unix)]
     {
@@ -398,7 +398,7 @@ fn seal(_path: &Path) {
     }
 }
 
-#[expect(clippy::used_underscore_binding)]
+#[cfg_attr(unix, expect(clippy::used_underscore_binding))]
 fn unseal(_path: &Path) {
     #[cfg(unix)]
     {
@@ -407,7 +407,7 @@ fn unseal(_path: &Path) {
     }
 }
 
-#[expect(clippy::used_underscore_binding)]
+#[cfg_attr(unix, expect(clippy::used_underscore_binding))]
 fn unseal_dir(_path: &Path) {
     #[cfg(unix)]
     {

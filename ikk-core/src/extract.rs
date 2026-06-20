@@ -560,7 +560,7 @@ pub fn exe_score(filename: &str) -> u32 {
     50
 }
 
-#[expect(clippy::used_underscore_binding)]
+#[cfg_attr(unix, expect(clippy::used_underscore_binding))]
 fn set_executable(_path: &Path) {
     #[cfg(unix)]
     {
