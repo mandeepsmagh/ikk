@@ -7,7 +7,10 @@ use crate::error::{IkkError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LockFile {
-    /// Merkle root over all package entries — detects tampering.
+    /// Integrity digest over all package entries — detects tampering.
+    /// A sorted hash list (degenerate single-level Merkle tree): each leaf
+    /// is sha256(name + version + uri + sha256 + bin_entry + variant), the
+    /// root is sha256(sorted leaves).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree_root: Option<String>,
 
@@ -26,7 +29,8 @@ pub struct LockedPackage {
     /// The resolved download URL or local path.
     pub uri: String,
 
-    /// SHA-256 of the archive / tarball (empty for local builds).
+    /// SHA-256 of the archive / tarball.
+    /// Empty for local builds — those entries are intentionally not hashed.
     #[serde(default)]
     pub sha256: String,
 
@@ -54,7 +58,7 @@ impl LockFile {
         Ok(lock)
     }
 
-    /// Verify the stored Merkle root.
+    /// Verify the stored integrity digest.
     pub fn verify(&self) -> Result<()> {
         if let Some(stored) = &self.tree_root {
             let computed = self.compute_root();
@@ -71,11 +75,18 @@ impl LockFile {
     }
 
     /// Save to disk with atomic write (temp → rename).
-    pub fn save(&mut self, path: &Path) -> Result<()> {
-        self.tree_root = Some(self.compute_root());
+    /// Uses a PID-suffixed temp file to avoid clobbering concurrent writes.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let root = self.compute_root();
+
+        // Build the serialized form with the root embedded
+        let mut lock = self.clone();
+        lock.tree_root = Some(root);
         let s =
-            toml::to_string_pretty(self).map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
-        let tmp = path.with_extension("lock.tmp");
+            toml::to_string_pretty(&lock).map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
+
+        let pid = std::process::id();
+        let tmp = path.with_extension(format!("lock.{pid}.tmp"));
         std::fs::write(&tmp, s)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
@@ -94,7 +105,8 @@ impl LockFile {
         self.packages.remove(name);
     }
 
-    /// Merkle root: sha256(sorted(sha256(name + sha256))).
+    /// Integrity digest: sha256 of sorted per-package leaf hashes.
+    /// Each leaf hashes name + version + uri + sha256 + bin_entry + variant.
     #[must_use]
     pub fn compute_root(&self) -> String {
         let mut leaves: Vec<String> = self
@@ -103,7 +115,13 @@ impl LockFile {
             .map(|(name, pkg)| {
                 let mut h = Sha256::new();
                 h.update(name.as_bytes());
+                h.update(pkg.version.as_bytes());
+                h.update(pkg.uri.as_bytes());
                 h.update(pkg.sha256.as_bytes());
+                h.update(pkg.bin_entry.as_bytes());
+                if let Some(v) = &pkg.variant {
+                    h.update(v.as_bytes());
+                }
                 hex::encode(h.finalize())
             })
             .collect();
@@ -157,22 +175,28 @@ impl SyncPlan {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+/// Current Unix timestamp. Logs a warning if the system clock is before 1970.
 #[must_use]
 pub fn unix_now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(dur) => dur.as_secs(),
+        Err(e) => {
+            tracing::warn!("system clock is before Unix epoch: {e}");
+            0
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn pkg(version: &str, hash: &str) -> LockedPackage {
-        // Pad hash to at least 12 chars for bin_entry
+    fn pkg(version: &str, hash: &str, uri: &str) -> LockedPackage {
         let padded = format!("{hash:0>12}");
         LockedPackage {
             version: version.into(),
             variant: None,
-            uri: "https://github.com/foo/bar".into(),
+            uri: uri.into(),
             sha256: hash.into(),
             bin_entry: format!("{}-foo-{}", &padded[..12], version),
             is_dir: false,
@@ -181,31 +205,44 @@ mod tests {
     }
 
     #[test]
-    fn merkle_root_deterministic() {
+    fn integrity_digest_deterministic() {
         let mut lock = LockFile::default();
-        lock.insert("a".into(), pkg("1.0", "aaa"));
-        lock.insert("b".into(), pkg("2.0", "bbb"));
+        lock.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/a"));
+        lock.insert("b".into(), pkg("2.0", "bbb", "https://github.com/foo/b"));
         let root1 = lock.compute_root();
 
         let mut lock2 = LockFile::default();
-        lock2.insert("b".into(), pkg("2.0", "bbb"));
-        lock2.insert("a".into(), pkg("1.0", "aaa"));
+        lock2.insert("b".into(), pkg("2.0", "bbb", "https://github.com/foo/b"));
+        lock2.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/a"));
         let root2 = lock2.compute_root();
 
         assert_eq!(root1, root2, "order-independent");
     }
 
     #[test]
-    fn merkle_root_changes_on_tamper() {
+    fn integrity_digest_changes_on_uri_swap() {
         let mut lock = LockFile::default();
-        lock.insert("a".into(), pkg("1.0", "aaa"));
+        lock.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/bar"));
         let root1 = lock.compute_root();
 
         let mut lock2 = LockFile::default();
-        lock2.insert("a".into(), pkg("1.0", "bbb"));
+        lock2.insert("a".into(), pkg("1.0", "aaa", "https://evil.com/foo/bar"));
         let root2 = lock2.compute_root();
 
-        assert_ne!(root1, root2);
+        assert_ne!(root1, root2, "uri swap changes digest");
+    }
+
+    #[test]
+    fn integrity_digest_changes_on_hash_tamper() {
+        let mut lock = LockFile::default();
+        lock.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/bar"));
+        let root1 = lock.compute_root();
+
+        let mut lock2 = LockFile::default();
+        lock2.insert("a".into(), pkg("1.0", "bbb", "https://github.com/foo/bar"));
+        let root2 = lock2.compute_root();
+
+        assert_ne!(root1, root2, "hash tamper changes digest");
     }
 
     #[test]
@@ -216,7 +253,7 @@ mod tests {
     #[test]
     fn verify_bad_root_detected() {
         let mut lock = LockFile::default();
-        lock.insert("x".into(), pkg("1.0", "abc"));
+        lock.insert("x".into(), pkg("1.0", "abc", "https://github.com/x/y"));
         lock.tree_root = Some("deadbeef".into());
         assert!(lock.verify().is_err());
     }
