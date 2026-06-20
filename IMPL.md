@@ -182,11 +182,11 @@ Stage 1 — Install Core (Forge Discovery)
 [x] 1.15  Integration test
 
 Stage 2 — URL Template Mode
-[ ] 2.1   {version} substitution
-[ ] 2.2   {variant} substitution
-[ ] 2.3   Mode dispatch
-[ ] 2.4   Template download
-[ ] 2.5   Test: URL template
+[x] 2.1   {version} substitution
+[x] 2.2   {variant} substitution
+[x] 2.3   Mode dispatch
+[x] 2.4   Template download
+[x] 2.5   Test: URL template
 
 Stage 3 — Local Modes + Variants
 [ ] 3.1   Local binary mode

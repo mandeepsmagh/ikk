@@ -20,7 +20,7 @@ pub async fn run(_args: SyncArgs, home: &IkkHome) -> Result<()> {
 
     let mut installed = vec![];
     let mut removed = vec![];
-    let mut unchanged = vec![];
+    let mut unchanged: Vec<String> = vec![];
     let mut failed = vec![];
 
     for (name, pkg) in ctx.config.packages.clone() {
@@ -78,9 +78,22 @@ pub async fn run(_args: SyncArgs, home: &IkkHome) -> Result<()> {
                     Err(e) => failed.push((name, e.to_string())),
                 }
             }
+            PackageMode::UrlTemplate => {
+                let req = ops::InstallRequest {
+                    name: &name,
+                    pkg: &pkg,
+                    config: &ctx.config,
+                    platform: &ctx.platform,
+                    home: &ctx.home,
+                };
+                match ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await {
+                    Ok(()) => installed.push(name),
+                    Err(e) => failed.push((name, e.to_string())),
+                }
+            }
             _ => {
                 unchanged.push(name);
-                continue; // Not yet implemented in Stage 1
+                continue; // Local modes — Stage 3
             }
         }
     }
