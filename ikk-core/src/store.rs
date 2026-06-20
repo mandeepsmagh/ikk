@@ -181,6 +181,76 @@ impl Store {
         })
     }
 
+    /// Store an entire directory tree as a multi-file package.
+    /// Copies the source directory into the store entry.
+    pub fn insert_dir(
+        &self,
+        name: &str,
+        version: &str,
+        variant: Option<&str>,
+        src_dir: &Path,
+        source_url: &str,
+        archive_sha256: &str,
+    ) -> Result<StorePath> {
+        // Hash the entire directory for content-addressing
+        let dir_hash = hash_dir(src_dir)?;
+        let entry_name = Self::entry_name(name, version, variant, &dir_hash);
+        let entry = self.root.join(&entry_name);
+
+        if entry.exists() {
+            tracing::debug!("store hit: {}", entry.display());
+            return Ok(StorePath {
+                hash: dir_hash,
+                name: name.to_string(),
+                version: version.to_string(),
+                variant: variant.map(String::from),
+                entry_name,
+                binary: entry.clone(),
+                path: entry,
+            });
+        }
+
+        std::fs::create_dir_all(&entry)?;
+
+        // Preserve the directory structure under a 'bin' subdir for consistency
+        let bin_dir = entry.join("bin");
+        copy_dir_contents(src_dir, &bin_dir)?;
+        set_executable_recursive(&bin_dir)?;
+
+        // Metadata
+        let meta = StoreMeta {
+            name: name.to_string(),
+            version: version.to_string(),
+            variant: variant.map(String::from),
+            source_url: source_url.to_string(),
+            archive_sha256: archive_sha256.to_string(),
+            binary_sha256: dir_hash.clone(),
+            installed_at: crate::lock::unix_now(),
+        };
+        std::fs::write(
+            entry.join("meta.toml"),
+            toml::to_string(&meta).map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?,
+        )?;
+
+        tracing::info!(
+            "stored {}@{}{} (dir, {})",
+            name,
+            version,
+            variant.map_or(String::new(), |v| format!("-{v}")),
+            &dir_hash[..12],
+        );
+
+        Ok(StorePath {
+            hash: dir_hash,
+            name: name.to_string(),
+            version: version.to_string(),
+            variant: variant.map(String::from),
+            entry_name,
+            binary: entry.clone(),
+            path: entry,
+        })
+    }
+
     /// Remove a store entry by entry name.
     pub fn remove_by_entry(&self, entry_name: &str) -> Result<()> {
         let entry = self.root.join(entry_name);
@@ -252,6 +322,60 @@ pub enum VerifyResult {
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+/// Compute a deterministic hash of a directory's contents.
+fn hash_dir(dir: &Path) -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| IkkError::Store(e.to_string()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    entries.sort();
+
+    for path in &entries {
+        hasher.update(path.file_name().unwrap_or_default().to_string_lossy().as_bytes());
+        if path.is_dir() {
+            hasher.update(hash_dir(path)?.as_bytes());
+        } else {
+            let bytes = std::fs::read(path)?;
+            hasher.update(&sha256_hex(&bytes).as_bytes());
+        }
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_contents(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest)?;
+        }
+    }
+    Ok(())
+}
+
+fn set_executable_recursive(dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            set_executable_recursive(&path)?;
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn seal(path: &Path) -> Result<()> {

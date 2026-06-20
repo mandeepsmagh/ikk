@@ -204,12 +204,12 @@ Stage 3 — Local Modes + Variants
 [ ] 3.13  Test: variant switching
 
 Stage 4 — Multi-File Packages + ikk run
-[ ] 4.1   is_dir detection
-[ ] 4.2   Directory extraction
-[ ] 4.3   Directory symlink
-[ ] 4.4   ikk run
-[ ] 4.5   ikk list per-package
-[ ] 4.6   PATH behavior
+[x] 4.1   is_dir detection
+[x] 4.2   Directory extraction
+[x] 4.3   Directory symlink
+[x] 4.4   ikk run
+[x] 4.5   ikk list per-package
+[x] 4.6   PATH behavior
 [ ] 4.7   Test: multi-binary
 
 Stage 5 — Windows + Polish
