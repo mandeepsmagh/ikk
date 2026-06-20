@@ -10,7 +10,7 @@ use ikk_core::{
 
 #[derive(Args)]
 #[command(
-    after_help = "EXAMPLES:\n  ikk install ripgrep --uri BurntSushi/ripgrep --version 14.1.1\n  ikk install fd --uri sharkdp/fd --binary fd\n  ikk install mytool --uri file:///home/user/dev/mytool\n  ikk install llama-cpp --uri ggml-org/llama.cpp --variant cuda12"
+    after_help = "EXAMPLES:\n  # forge discovery (default)\n  ikk install ripgrep --uri BurntSushi/ripgrep --version 14.1.1\n\n  # URL template\n  ikk install rik --version 0.13.0 --uri 'https://github.com/nalply/rik/releases/download/{version}/rik-{version}-x86_64-linux.tar.gz'\n\n  # variant template\n  ikk install llama --version b5262 --variant cuda12 --uri 'https://github.com/ggml-org/llama.cpp/releases/download/{version}/llama-{version}-bin-ubuntu-{variant}-x64.tar.gz'\n\n  # local (Stage 3)\n  ikk install mytool --uri file:///home/user/dev/mytool"
 )]
 pub struct AddArgs {
     /// Package name (e.g. "ripgrep")
@@ -25,7 +25,7 @@ pub struct AddArgs {
     #[arg(long)]
     pub version: Option<String>,
 
-    /// Variant label (e.g. "cuda12", "cpu")
+    /// Variant label (e.g. "cuda12", "cpu"). Used with {variant} in URI templates.
     #[arg(long)]
     pub variant: Option<String>,
 
@@ -72,7 +72,15 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
             ops::install(&req, &*remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock).await?;
         }
         PackageMode::UrlTemplate => {
-            anyhow::bail!("URL template mode not yet implemented (Stage 2)");
+            let req = ops::InstallRequest {
+                name: &args.name,
+                pkg: &pkg,
+                config: &ctx.config,
+                platform: &ctx.platform,
+                home: &ctx.home,
+            };
+
+            ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await?;
         }
         PackageMode::LocalBinary | PackageMode::LocalBuild => {
             anyhow::bail!("local modes not yet implemented (Stage 3)");
