@@ -1,3 +1,6 @@
+#![allow(clippy::needless_pass_by_value, clippy::unused_async)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 

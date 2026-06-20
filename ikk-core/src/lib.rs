@@ -1,3 +1,16 @@
+#![allow(clippy::module_name_repetitions)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::items_after_statements,
+    clippy::cast_sign_loss,
+    clippy::unreadable_literal,
+    clippy::doc_markdown,
+    clippy::similar_names,
+    clippy::bool_to_int_with_if
+)]
+
 pub mod config;
 pub mod error;
 pub mod extract;

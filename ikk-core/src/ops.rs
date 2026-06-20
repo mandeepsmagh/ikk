@@ -142,8 +142,8 @@ pub fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFil
     let binary_name = pkg.binary.as_deref().unwrap_or(name);
 
     // Resolve file:// URI to an absolute path
-    let url = url::Url::parse(&pkg.uri).map_err(|e| IkkError::MalformedUri(format!("{}", e)))?;
-    let path = url.to_file_path().map_err(|_| IkkError::LocalPathNotFound(pkg.uri.clone()))?;
+    let url = url::Url::parse(&pkg.uri).map_err(|e| IkkError::MalformedUri(format!("{e}")))?;
+    let path = url.to_file_path().map_err(|()| IkkError::LocalPathNotFound(pkg.uri.clone()))?;
 
     if !path.exists() {
         return Err(IkkError::LocalPathNotFound(path.display().to_string()));

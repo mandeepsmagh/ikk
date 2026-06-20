@@ -13,26 +13,33 @@ impl Default for IkkHome {
 }
 
 impl IkkHome {
+    #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
+    #[must_use]
     pub fn default_root() -> PathBuf {
         dirs::home_dir().expect("cannot determine home directory").join(".ikk")
     }
 
+    #[must_use]
     pub fn config_file(&self) -> PathBuf {
         self.root.join("ikk.toml")
     }
+    #[must_use]
     pub fn lock_file(&self) -> PathBuf {
         self.root.join("ikk.lock")
     }
+    #[must_use]
     pub fn store_dir(&self) -> PathBuf {
         self.root.join("store")
     }
+    #[must_use]
     pub fn bin_dir(&self) -> PathBuf {
         self.root.join("bin")
     }
+    #[must_use]
     pub fn stage_dir(&self) -> PathBuf {
         self.root.join("stage")
     }
@@ -46,6 +53,7 @@ impl IkkHome {
     }
 
     /// True if ikk has been initialised (root dir exists).
+    #[must_use]
     pub fn exists(&self) -> bool {
         self.root.exists()
     }

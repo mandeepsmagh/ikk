@@ -26,12 +26,14 @@ pub enum Arch {
 }
 
 impl Platform {
+    #[must_use]
     pub fn current() -> Self {
         Self { os: Os::current(), arch: Arch::current() }
     }
 }
 
 impl Os {
+    #[must_use]
     pub fn current() -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -52,6 +54,7 @@ impl Os {
     }
 
     /// All known asset name variants for this OS — checked in order
+    #[must_use]
     pub fn variants(&self) -> &[&str] {
         match self {
             Os::MacOs => &["darwin", "macos", "apple-darwin", "osx"],
@@ -63,6 +66,7 @@ impl Os {
 }
 
 impl Arch {
+    #[must_use]
     pub fn current() -> Self {
         #[cfg(target_arch = "aarch64")]
         {
@@ -79,6 +83,7 @@ impl Arch {
     }
 
     /// All known asset name variants — checked in order
+    #[must_use]
     pub fn variants(&self) -> &[&str] {
         match self {
             Arch::Aarch64 => &["aarch64", "arm64", "armv8"],
@@ -90,17 +95,19 @@ impl Arch {
 
 /// Score an asset name against the current platform.
 /// Higher score = better match. None = not a match.
+#[must_use]
 pub fn score_asset(name: &str, platform: &Platform) -> Option<u32> {
     let name = name.to_lowercase();
 
     // must match both arch and os
-    let arch_match = platform
-        .arch
-        .variants()
-        .iter()
-        .enumerate()
-        .find(|(_, v)| name.contains(*v))
-        .map(|(i, _)| (platform.arch.variants().len() - i) as u32)?;
+    let arch_match =
+        platform
+            .arch
+            .variants()
+            .iter()
+            .enumerate()
+            .find(|(_, v)| name.contains(*v))
+            .map(|(i, _)| u32::try_from(platform.arch.variants().len() - i).unwrap_or(0))?;
 
     let os_match = platform
         .os
@@ -108,17 +115,21 @@ pub fn score_asset(name: &str, platform: &Platform) -> Option<u32> {
         .iter()
         .enumerate()
         .find(|(_, v)| name.contains(*v))
-        .map(|(i, _)| (platform.os.variants().len() - i) as u32)?;
+        .map(|(i, _)| u32::try_from(platform.os.variants().len() - i).unwrap_or(0))?;
 
     // prefer native archives over generic ones
+    let is_raw = !(name.ends_with(".tar.gz")
+        || name.ends_with(".tar.xz")
+        || name.ends_with(".zip")
+        || name.ends_with(".exe")
+        || name.ends_with(".dmg")
+        || name.ends_with(".pkg"));
     let archive_bonus: u32 = if name.ends_with(".tar.gz") || name.ends_with(".tar.xz") {
         2
     } else if name.ends_with(".zip") {
         1
-    } else if name.ends_with(".exe") || name.ends_with(".dmg") || name.ends_with(".pkg") {
-        0
     } else {
-        1 // raw binary
+        u32::from(is_raw)
     };
 
     Some(arch_match + os_match + archive_bonus)

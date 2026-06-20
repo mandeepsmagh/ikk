@@ -22,6 +22,7 @@ impl ConfigRegistry {
     /// Build from user-supplied extra remotes.
     /// Built-in defaults are always loaded first;
     /// user entries appended — later entries win on same host.
+    #[must_use]
     pub fn new(user_remotes: Vec<RemoteConfig>) -> Self {
         let defaults: RemotesFile = toml::from_str(DEFAULT_REMOTES)
             .expect("built-in remotes.toml is invalid — this is a bug");

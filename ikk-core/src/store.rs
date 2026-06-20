@@ -44,11 +44,13 @@ impl Store {
         Ok(Self { root })
     }
 
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// Build the directory name for a store entry.
+    #[must_use]
     pub fn entry_name(
         name: &str,
         version: &str,
@@ -64,6 +66,7 @@ impl Store {
     }
 
     /// Fully qualified path to a store entry directory.
+    #[must_use]
     pub fn entry_path(
         &self,
         name: &str,
@@ -75,12 +78,13 @@ impl Store {
     }
 
     /// Find all store entries matching a package name.
+    #[must_use]
     pub fn find_all(&self, name: &str) -> Vec<StorePath> {
         let prefix = format!("-{name}-");
         let mut results: Vec<StorePath> = std::fs::read_dir(&self.root)
             .into_iter()
             .flatten()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().contains(&prefix))
             .filter_map(|e| {
                 let path = e.path();
@@ -160,7 +164,7 @@ impl Store {
         )?;
 
         // Seal — read + execute only
-        seal(&binary_path)?;
+        seal(&binary_path);
 
         tracing::info!(
             "stored {}@{}{} ({})",
@@ -255,14 +259,14 @@ impl Store {
     pub fn remove_by_entry(&self, entry_name: &str) -> Result<()> {
         let entry = self.root.join(entry_name);
         if entry.exists() {
-            unseal_dir(&entry)?;
+            unseal_dir(&entry);
             // Find and unseal the binary inside
             if let Ok(meta_toml) = std::fs::read_to_string(entry.join("meta.toml"))
                 && let Ok(meta) = toml::from_str::<StoreMeta>(&meta_toml)
             {
                 let bin = entry.join("bin").join(&meta.name);
                 if bin.exists() {
-                    let _ = unseal(&bin);
+                    let () = unseal(&bin);
                 }
             }
             std::fs::remove_dir_all(&entry)?;
@@ -280,7 +284,7 @@ impl Store {
     pub fn verify_all(&self) -> Result<Vec<VerifyResult>> {
         let mut results = vec![];
 
-        for entry in std::fs::read_dir(&self.root)?.filter_map(|e| e.ok()) {
+        for entry in std::fs::read_dir(&self.root)?.filter_map(std::result::Result::ok) {
             let meta_path = entry.path().join("meta.toml");
             if !meta_path.exists() {
                 continue;
@@ -320,6 +324,7 @@ pub enum VerifyResult {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+#[must_use]
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -334,7 +339,7 @@ fn hash_dir(dir: &Path) -> Result<String> {
     let mut hasher = Sha256::new();
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .map_err(|e| IkkError::Store(e.to_string()))?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .collect();
     entries.sort();
@@ -351,12 +356,12 @@ fn hash_dir(dir: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
+fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest_dir)?;
     for entry in std::fs::read_dir(src).map_err(|e| IkkError::Store(e.to_string()))? {
         let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
         let path = entry.path();
-        let dest = dst.join(entry.file_name());
+        let dest = dest_dir.join(entry.file_name());
         if path.is_dir() {
             copy_dir_contents(&path, &dest)?;
         } else {
@@ -383,32 +388,29 @@ fn set_executable_recursive(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn seal(_path: &Path) -> Result<()> {
+fn seal(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         // chmod may fail on WSL2 drvfs — non-fatal
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555));
     }
-    Ok(())
 }
 
-fn unseal(_path: &Path) -> Result<()> {
+fn unseal(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
     }
-    Ok(())
 }
 
-fn unseal_dir(_path: &Path) -> Result<()> {
+fn unseal_dir(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
     }
-    Ok(())
 }
 
 #[cfg(test)]

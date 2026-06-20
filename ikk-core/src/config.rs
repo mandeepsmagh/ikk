@@ -95,6 +95,7 @@ pub struct SecurityConfig {
 }
 
 impl SecurityConfig {
+    #[must_use]
     pub fn is_old_enough(&self, published_at: Option<&str>) -> bool {
         if self.min_release_age_days == 0 {
             return true;
@@ -125,12 +126,12 @@ pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
 }
 
 fn days_from_civil(mut y: i64, m: u32, d: u32) -> u64 {
-    let mut m = m as i64;
+    let mut m = i64::from(m);
     if m <= 2 {
         y -= 1;
         m += 12;
     }
-    let d = d as i64;
+    let d = i64::from(d);
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u64;
     let doy = (153 * (m as u64 - 3) + 2) / 5 + d as u64 - 1;
@@ -165,10 +166,12 @@ pub struct TokenConfig {
 }
 
 impl AuthConfig {
+    #[must_use]
     pub fn token_for(&self, host: &str) -> Option<String> {
         self.tokens.get(host).and_then(|t| std::env::var(&t.env).ok())
     }
 
+    #[must_use]
     pub fn ssh_key_path(&self) -> PathBuf {
         self.ssh_key
             .clone()
@@ -283,6 +286,7 @@ impl Config {
     /// Expand shorthand URIs to full URLs.
     /// `owner/repo` → `https://{default}.remote/owner/repo`
     /// `host/owner/repo` → `https://host/owner/repo`
+    #[must_use]
     pub fn expand_uri(uri: &str, default_remote: Option<&str>) -> String {
         if uri.contains("://") || uri.starts_with('/') || uri.starts_with("~/") {
             return uri.to_string();
@@ -310,6 +314,7 @@ impl Config {
     }
 
     /// Get a package config by name.
+    #[must_use]
     pub fn get_package(&self, name: &str) -> Option<&PackageConfig> {
         self.packages.get(name)
     }

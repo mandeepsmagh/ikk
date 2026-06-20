@@ -81,6 +81,7 @@ impl LockFile {
         Ok(())
     }
 
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&LockedPackage> {
         self.packages.get(name)
     }
@@ -94,6 +95,7 @@ impl LockFile {
     }
 
     /// Merkle root: sha256(sorted(sha256(name + sha256))).
+    #[must_use]
     pub fn compute_root(&self) -> String {
         let mut leaves: Vec<String> = self
             .packages
@@ -116,6 +118,7 @@ impl LockFile {
     }
 
     /// Compute diff between lock (desired) and what's in the store.
+    #[must_use]
     pub fn diff(&self, installed: &BTreeMap<String, String>) -> SyncPlan {
         let mut to_install = vec![];
         let mut to_remove = vec![];
@@ -124,8 +127,7 @@ impl LockFile {
         for (name, pkg) in &self.packages {
             match installed.get(name) {
                 Some(ver) if ver == &pkg.version => up_to_date.push(name.clone()),
-                Some(_) => to_install.push(name.clone()),
-                None => to_install.push(name.clone()),
+                Some(_) | None => to_install.push(name.clone()),
             }
         }
 
@@ -147,6 +149,7 @@ pub struct SyncPlan {
 }
 
 impl SyncPlan {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.to_install.is_empty() && self.to_remove.is_empty()
     }
@@ -154,6 +157,7 @@ impl SyncPlan {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+#[must_use]
 pub fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
 }
@@ -172,7 +176,7 @@ mod tests {
             sha256: hash.into(),
             bin_entry: format!("{}-foo-{}", &padded[..12], version),
             is_dir: false,
-            installed_at: 1700000000,
+            installed_at: 1_700_000_000,
         }
     }
 

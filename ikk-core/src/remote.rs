@@ -94,6 +94,7 @@ impl ConfiguredRemote {
 
     /// Simple dot-notation + array path extractor.
     /// Supports: "tag_name", "assets", "assets.links", "browser_download_url"
+    #[allow(clippy::unused_self)]
     fn extract<'a>(&self, json: &'a Value, path: &str) -> Option<&'a Value> {
         if path.is_empty() {
             return None;

@@ -14,6 +14,7 @@ pub enum ArchiveKind {
 }
 
 impl ArchiveKind {
+    #[must_use]
     pub fn detect(filename: &str) -> Self {
         let f = filename.to_lowercase();
         if f.ends_with(".tar.gz") || f.ends_with(".tgz") {
@@ -79,7 +80,7 @@ pub fn extract(
                 out
             };
             std::fs::write(&out, bytes)?;
-            set_executable(&out)?;
+            set_executable(&out);
             Ok(out)
         }
         ArchiveKind::Dmg => {
@@ -109,7 +110,7 @@ pub fn extract_dir(bytes: &[u8], asset_name: &str, stage_dir: &Path) -> Result<P
             let name = asset_name.rsplit('/').next().unwrap_or("binary");
             let out = out_dir.join(name);
             std::fs::write(&out, bytes)?;
-            set_executable(&out)?;
+            set_executable(&out);
             Ok(out_dir)
         }
         ArchiveKind::Dmg => {
@@ -208,7 +209,7 @@ fn find_exe_in_dir(dir: &Path, best: &mut Option<(PathBuf, u32)>) -> Result<()> 
 
 #[cfg(target_os = "macos")]
 fn find_binary_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
-    for e in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
+    for e in std::fs::read_dir(dir).ok()?.filter_map(std::result::Result::ok) {
         let p = e.path();
         if p.is_dir() {
             if let Some(found) = find_binary_in_dir(&p, name) {
@@ -328,11 +329,11 @@ fn extract_dmg_to_dir(bytes: &[u8], _asset_name: &str, out_dir: &Path) -> Result
 }
 
 #[cfg(target_os = "macos")]
-fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
     for entry in std::fs::read_dir(src).map_err(|e| IkkError::Store(e.to_string()))? {
         let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
         let path = entry.path();
-        let dest = dst.join(entry.file_name());
+        let dest = dest_dir.join(entry.file_name());
         if path.is_dir() {
             std::fs::create_dir_all(&dest)?;
             copy_dir_contents(&path, &dest)?;
@@ -350,7 +351,7 @@ fn set_executable_recursive(dir: &Path) -> Result<()> {
         if path.is_dir() {
             set_executable_recursive(&path)?;
         } else {
-            let _ = set_executable(&path);
+            let () = set_executable(&path);
         }
     }
     Ok(())
@@ -394,7 +395,7 @@ fn extract_tar_archive<R: std::io::Read>(
     if let Some((found_path, _)) = best {
         let out = stage_dir.join(found_path.file_name().unwrap());
         std::fs::rename(found_path, &out)?;
-        set_executable(&out)?;
+        set_executable(&out);
         Ok(out)
     } else {
         Err(IkkError::Store(format!("binary '{binary_name}' not found in archive")))
@@ -454,7 +455,7 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
     if let Some((found_path, _)) = best {
         let out = stage_dir.join(found_path.file_name().unwrap());
         std::fs::rename(found_path, &out)?;
-        set_executable(&out)?;
+        set_executable(&out);
         Ok(out)
     } else {
         Err(IkkError::Store(format!("binary '{binary_name}' not found in zip")))
@@ -513,7 +514,7 @@ fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
     let _ =
         Command::new("xattr").args(["-dr", "com.apple.quarantine", dst.to_str().unwrap()]).output();
 
-    set_executable(&dst)?;
+    set_executable(&dst);
     Ok(dst)
 }
 
@@ -536,6 +537,7 @@ fn name_match_score(filename: &str, binary_name: &str) -> u32 {
 }
 
 /// Score how likely a file is to be a binary (not data). Higher = more binary-like.
+#[must_use]
 pub fn exe_score(filename: &str) -> u32 {
     let f = filename.to_lowercase();
     // data files and shared libraries — reject
@@ -558,14 +560,12 @@ pub fn exe_score(filename: &str) -> u32 {
     50
 }
 
-fn set_executable(_path: &Path) -> Result<()> {
+fn set_executable(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        // chmod may fail on WSL2 drvfs — non-fatal
         let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
     }
-    Ok(())
 }
 
 #[cfg(test)]
