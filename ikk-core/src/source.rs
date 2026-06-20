@@ -21,6 +21,10 @@ pub struct FetchedBinary {
     pub source_url: String,
     /// The actual binary filename detected in the archive.
     pub detected_name: String,
+    /// True if the package is a directory (multi-binary).
+    /// When true, binary_bytes is empty and source_url points to
+    /// the extracted directory.
+    pub is_dir: bool,
 }
 
 // ── source trait ────────────────────────────────────────────────────────────
@@ -51,7 +55,6 @@ pub(crate) struct RemoteSource {
     security: SecurityConfig,
 }
 
-#[allow(dead_code)]
 impl RemoteSource {
     pub fn new(
         remote: Box<dyn Remote>,
@@ -109,9 +112,49 @@ impl Source for RemoteSource {
 
         let archive_hash = sha256_hex(bytes);
 
-        // Note: sha256 verification against user-supplied expected hash is the
-        // caller's responsibility (ops.rs does this). The archive_hash returned
-        // here is for the lock file, not for verification.
+        // Try directory extraction to detect multi-binary packages
+        let archive_kind = crate::extract::ArchiveKind::detect(&asset.name);
+        let is_archive = matches!(
+            archive_kind,
+            crate::extract::ArchiveKind::TarGz
+                | crate::extract::ArchiveKind::TarXz
+                | crate::extract::ArchiveKind::Zip
+        );
+
+        if is_archive {
+            let extracted_dir = crate::extract::extract_dir(bytes, &asset.name, stage_dir)?;
+            let binaries = crate::extract::list_binaries(&extracted_dir)?;
+            match binaries.as_slice() {
+                [binary] => {
+                    let binary_bytes = std::fs::read(binary)?;
+                    let _ = std::fs::remove_dir_all(&extracted_dir);
+                    let detected = binary
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(binary_name)
+                        .to_string();
+                    return Ok(FetchedBinary {
+                        binary_bytes,
+                        archive_hash,
+                        source_url: asset.url.clone(),
+                        detected_name: detected,
+                        is_dir: false,
+                    });
+                }
+                [] => {}
+                _ => {
+                    tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
+                    return Ok(FetchedBinary {
+                        binary_bytes: vec![],
+                        archive_hash,
+                        source_url: extracted_dir.display().to_string(),
+                        detected_name: binary_name.to_string(),
+                        is_dir: true,
+                    });
+                }
+            }
+            let _ = std::fs::remove_dir_all(&extracted_dir);
+        }
 
         let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
         let binary_bytes = std::fs::read(&binary_path)?;
@@ -125,6 +168,7 @@ impl Source for RemoteSource {
             archive_hash,
             source_url: asset.url.clone(),
             detected_name,
+            is_dir: false,
         })
     }
 }
@@ -138,7 +182,6 @@ pub(crate) struct LocalSource {
     build: Option<Vec<String>>,
 }
 
-#[allow(dead_code)]
 impl LocalSource {
     pub fn new(path: PathBuf, is_dir: bool, build: Option<Vec<String>>) -> Self {
         Self { path, is_dir, build }
@@ -187,13 +230,12 @@ impl Source for LocalSource {
             (binary_bytes, archive_hash, detected)
         };
 
-        Ok(FetchedBinary { binary_bytes, archive_hash, source_url, detected_name })
+        Ok(FetchedBinary { binary_bytes, archive_hash, source_url, detected_name, is_dir: false })
     }
 }
 
 // ── local build ─────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 pub(crate) fn build_local(
     dir: &Path,
     binary_name: &str,

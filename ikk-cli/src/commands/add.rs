@@ -73,15 +73,8 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
                 home: &ctx.home,
             };
 
-            ops::install(
-                &req,
-                &*remote,
-                &ctx.http,
-                &ctx.config.security,
-                &ctx.store,
-                &mut ctx.lock,
-            )
-            .await?;
+            ops::install(&req, remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock)
+                .await?;
         }
         PackageMode::UrlTemplate => {
             let req = ops::InstallRequest {
