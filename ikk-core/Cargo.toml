@@ -17,6 +17,8 @@ anyhow      = { workspace = true }
 dirs        = { workspace = true }
 url         = { workspace = true }
 async-trait = { workspace = true }
+indicatif   = { workspace = true }
+futures     = { workspace = true }
 flate2      = "1"
 tar         = "0.4"
 zip         = "8"

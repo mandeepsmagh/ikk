@@ -5,6 +5,7 @@ pub mod home;
 pub mod lock;
 pub mod ops;
 pub mod platform;
+pub mod progress;
 pub mod registry;
 pub mod remote;
 pub mod shell;

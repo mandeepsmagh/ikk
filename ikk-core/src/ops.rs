@@ -236,7 +236,7 @@ async fn fetch_template(
     stage_dir: &Path,
 ) -> Result<(Vec<u8>, String, String, bool)> {
     tracing::info!("downloading {}…", download_url);
-    let bytes = http.get(download_url).send().await?.bytes().await?;
+    let bytes = crate::progress::download_bytes(http, download_url, binary_name).await?;
     let bytes = bytes.as_ref();
 
     let archive_hash = sha256_hex(bytes);
@@ -335,7 +335,7 @@ async fn fetch_forge(
     let asset = crate::extract::best_asset(&assets, platform, pkg.binary.as_deref())?;
 
     tracing::info!("downloading {}…", asset.name);
-    let bytes = http.get(&asset.url).send().await?.bytes().await?;
+    let bytes = crate::progress::download_bytes(http, &asset.url, &asset.name).await?;
     let bytes = bytes.as_ref();
 
     let archive_hash = sha256_hex(bytes);
