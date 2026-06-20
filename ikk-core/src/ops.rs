@@ -110,7 +110,7 @@ pub async fn install_template(
     let download_url = resolve_uri_template(&pkg.uri, version, pkg.variant.as_deref())?;
 
     // Fetch
-    let (binary_bytes, archive_hash, is_dir) =
+    let (binary_bytes, archive_hash, source_url, is_dir) =
         fetch_template(name, version, binary_name, pkg, &download_url, http, &req.home.stage_dir())
             .await?;
 
@@ -120,7 +120,7 @@ pub async fn install_template(
         version,
         binary_name,
         pkg,
-        download_url,
+        source_url,
         archive_hash,
         binary_bytes,
         is_dir,
@@ -233,12 +233,11 @@ async fn fetch_template(
     download_url: &str,
     http: &reqwest::Client,
     stage_dir: &Path,
-) -> Result<(Vec<u8>, String, bool)> {
+) -> Result<(Vec<u8>, String, String, bool)> {
     tracing::info!("downloading {}…", download_url);
     let bytes = http.get(download_url).send().await?.bytes().await?;
     let bytes = bytes.as_ref();
 
-    // SHA-256 verification
     let archive_hash = sha256_hex(bytes);
     if let Some(expected) = &pkg.sha256 {
         if archive_hash != *expected {
@@ -251,14 +250,34 @@ async fn fetch_template(
         }
     }
 
-    // Derive a filename from the URL for archive type detection
     let filename = download_url.rsplit('/').next().unwrap_or("download");
+    let archive_kind = crate::extract::ArchiveKind::detect(filename);
+    let is_archive = matches!(
+        archive_kind,
+        crate::extract::ArchiveKind::TarGz
+            | crate::extract::ArchiveKind::TarXz
+            | crate::extract::ArchiveKind::Zip
+    );
+
+    if is_archive {
+        match crate::extract::extract_dir(bytes, filename, stage_dir) {
+            Ok(extracted_dir) => {
+                let bin_count = crate::extract::count_binaries(&extracted_dir).unwrap_or(0);
+                if bin_count > 1 {
+                    tracing::info!("detected multi-binary package ({} binaries)", bin_count);
+                    return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
+                }
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+            }
+            _ => {}
+        }
+    }
 
     let binary_path = crate::extract::extract(bytes, filename, binary_name, stage_dir)?;
     let binary_bytes = std::fs::read(&binary_path)?;
     let _ = std::fs::remove_file(&binary_path);
 
-    Ok((binary_bytes, archive_hash, false))
+    Ok((binary_bytes, archive_hash, download_url.to_string(), false))
 }
 
 // ── version resolution ───────────────────────────────────────────────────────
@@ -321,7 +340,6 @@ async fn fetch_forge(
     let bytes = http.get(&asset.url).send().await?.bytes().await?;
     let bytes = bytes.as_ref();
 
-    // SHA-256 verification if user pinned a hash
     let archive_hash = sha256_hex(bytes);
     if let Some(expected) = &pkg.sha256 {
         if archive_hash != *expected {
@@ -334,12 +352,34 @@ async fn fetch_forge(
         }
     }
 
-    // Extract — for now, single binary only (is_dir = false).
-    // Stage 4 adds directory package support.
+    // Try full directory extraction to detect multi-binary packages
+    let archive_kind = crate::extract::ArchiveKind::detect(&asset.name);
+    let is_archive = matches!(
+        archive_kind,
+        crate::extract::ArchiveKind::TarGz
+            | crate::extract::ArchiveKind::TarXz
+            | crate::extract::ArchiveKind::Zip
+    );
+
+    if is_archive {
+        match crate::extract::extract_dir(bytes, &asset.name, stage_dir) {
+            Ok(extracted_dir) => {
+                let bin_count = crate::extract::count_binaries(&extracted_dir).unwrap_or(0);
+                if bin_count > 1 {
+                    // Multi-binary package — return directory path as source_url
+                    tracing::info!("detected multi-binary package ({} binaries)", bin_count);
+                    return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
+                }
+                // Single binary — fall through to single extract
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+            }
+            _ => {} // Fallback to single extraction
+        }
+    }
+
+    // Single binary extraction
     let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
     let binary_bytes = std::fs::read(&binary_path)?;
-
-    // Clean up extracted file
     let _ = std::fs::remove_file(&binary_path);
 
     Ok((binary_bytes, archive_hash, asset.url.clone(), false))
@@ -366,18 +406,34 @@ fn commit(
         remove_bin_link(bin_dir, name)?;
     }
 
-    // Store
-    let store_path = store.insert(
-        name,
-        version,
-        pkg.variant.as_deref(),
-        &binary_bytes,
-        &source_url,
-        &archive_hash,
-    )?;
+    let store_path = if is_dir && binary_bytes.is_empty() {
+        // Directory package — source_url is the extracted dir path
+        let src_dir = std::path::PathBuf::from(&source_url);
+        store.insert_dir(
+            name,
+            version,
+            pkg.variant.as_deref(),
+            &src_dir,
+            &source_url,
+            &archive_hash,
+        )?
+    } else {
+        store.insert(
+            name,
+            version,
+            pkg.variant.as_deref(),
+            &binary_bytes,
+            &source_url,
+            &archive_hash,
+        )?
+    };
 
-    // Link: bin/{name} → store/{hash12}-{name}-{version}[-{variant}]/bin/{name}
-    create_bin_link(&store_path.binary, &bin_dir.join(binary_name))?;
+    // Link: bin/{name} → store entry
+    if is_dir {
+        create_dir_link(&store_path.path, &bin_dir.join(binary_name))?;
+    } else {
+        create_file_link(&store_path.binary, &bin_dir.join(binary_name))?;
+    }
 
     // Lock
     lock.insert(
@@ -417,7 +473,7 @@ pub fn remove(
 
 // ── bin dir link helpers ──────────────────────────────────────────────────────
 
-fn create_bin_link(src: &Path, dst: &Path) -> Result<()> {
+fn create_file_link(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() || dst.symlink_metadata().is_ok() {
         std::fs::remove_file(dst).ok();
     }
@@ -435,9 +491,36 @@ fn create_bin_link(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+fn create_dir_link(src: &Path, dst: &Path) -> Result<()> {
+    // Remove existing link or dir
+    if dst.exists() {
+        if dst.is_dir() {
+            std::fs::remove_dir_all(dst).ok();
+        } else {
+            std::fs::remove_file(dst).ok();
+        }
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(src, dst)?;
+
+    #[cfg(windows)]
+    {
+        // NTFS junction — no elevation required
+        if std::os::windows::fs::symlink_dir(src, dst).is_err() {
+            // Fallback: copy entire dir
+            copy_dir_contents(src, dst)?;
+        }
+    }
+
+    Ok(())
+}
+
 fn remove_bin_link(bin_dir: &Path, name: &str) -> Result<()> {
     let path = bin_dir.join(name);
-    if path.exists() || path.symlink_metadata().is_ok() {
+    if path.is_dir() {
+        std::fs::remove_dir_all(&path).ok();
+    } else if path.exists() || path.symlink_metadata().is_ok() {
         std::fs::remove_file(&path)?;
     }
     Ok(())

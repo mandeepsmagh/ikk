@@ -72,7 +72,6 @@ pub fn extract(
         ArchiveKind::Zip => extract_zip(bytes, binary_name, stage_dir),
         ArchiveKind::Raw | ArchiveKind::AppImage => {
             let out = stage_dir.join(binary_name);
-            // on Windows, raw binaries need .exe extension to be executable
             #[cfg(target_os = "windows")]
             let out = if asset_name.ends_with(".exe") && !binary_name.ends_with(".exe") {
                 stage_dir.join(format!("{binary_name}.exe"))
@@ -93,6 +92,84 @@ pub fn extract(
     }
 }
 
+/// Extract entire archive to a directory, preserving the full tree.
+/// Returns the path to the extracted directory.
+pub fn extract_dir(bytes: &[u8], asset_name: &str, stage_dir: &Path) -> Result<PathBuf> {
+    let out_dir = stage_dir.join("extracted");
+    // Clean up any previous extraction
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir)?;
+
+    match ArchiveKind::detect(asset_name) {
+        ArchiveKind::TarGz => extract_tar_to_dir(bytes, &out_dir),
+        ArchiveKind::TarXz => extract_tar_xz_to_dir(bytes, &out_dir),
+        ArchiveKind::Zip => extract_zip_to_dir(bytes, &out_dir),
+        ArchiveKind::Raw | ArchiveKind::AppImage => {
+            // Single file "archive" — write to dir as the file itself
+            let name = asset_name.rsplit('/').next().unwrap_or("binary");
+            let out = out_dir.join(name);
+            std::fs::write(&out, bytes)?;
+            set_executable(&out)?;
+            Ok(out_dir)
+        }
+        ArchiveKind::Dmg => {
+            #[cfg(target_os = "macos")]
+            {
+                extract_dmg_to_dir(bytes, asset_name, &out_dir)
+            }
+            #[cfg(not(target_os = "macos"))]
+            Err(IkkError::Store(".dmg is only supported on macOS".into()))
+        }
+        ArchiveKind::Msi => Err(IkkError::Store(".msi extraction is not yet supported".into())),
+    }
+}
+
+/// Count how many executable-looking files are in a directory (recursive).
+pub fn count_binaries(dir: &Path) -> Result<usize> {
+    let mut count = 0;
+    count_binaries_recursive(dir, &mut count)?;
+    Ok(count)
+}
+
+fn count_binaries_recursive(dir: &Path, count: &mut usize) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            count_binaries_recursive(&path, count)?;
+        } else {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if exe_score(filename) > 0 {
+                *count += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// List all executable-looking files in a directory (recursive).
+pub fn list_binaries(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut binaries = vec![];
+    list_binaries_recursive(dir, &mut binaries)?;
+    Ok(binaries)
+}
+
+fn list_binaries_recursive(dir: &Path, binaries: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            list_binaries_recursive(&path, binaries)?;
+        } else {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if exe_score(filename) > 0 {
+                binaries.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn extract_tar_gz(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<PathBuf> {
     let cursor = std::io::Cursor::new(bytes);
     let dec = flate2::read::GzDecoder::new(cursor);
@@ -103,6 +180,117 @@ fn extract_tar_xz(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<P
     let cursor = std::io::Cursor::new(bytes);
     let dec = xz2::read::XzDecoder::new(cursor);
     extract_tar_archive(dec, binary_name, stage_dir)
+}
+
+/// Extract a tar.gz to a directory (full tree, no binary search).
+fn extract_tar_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
+    let cursor = std::io::Cursor::new(bytes);
+    let dec = flate2::read::GzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(dec);
+    archive.unpack(out_dir).map_err(|e| IkkError::Store(e.to_string()))?;
+    set_executable_recursive(out_dir)?;
+    Ok(out_dir.to_path_buf())
+}
+
+/// Extract a tar.xz to a directory (full tree).
+fn extract_tar_xz_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
+    let cursor = std::io::Cursor::new(bytes);
+    let dec = xz2::read::XzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(dec);
+    archive.unpack(out_dir).map_err(|e| IkkError::Store(e.to_string()))?;
+    set_executable_recursive(out_dir)?;
+    Ok(out_dir.to_path_buf())
+}
+
+/// Extract a .zip to a directory (full tree).
+fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
+    use zip::ZipArchive;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
+        let out_path = out_dir.join(file.name());
+        if file.is_dir() {
+            std::fs::create_dir_all(&out_path)?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut f = std::fs::File::create(&out_path)?;
+            std::io::copy(&mut file, &mut f)?;
+        }
+    }
+    set_executable_recursive(out_dir)?;
+    Ok(out_dir.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn extract_dmg_to_dir(bytes: &[u8], _asset_name: &str, out_dir: &Path) -> Result<PathBuf> {
+    use std::process::Command;
+
+    let dmg_path = out_dir.join("download.dmg");
+    std::fs::write(&dmg_path, bytes)?;
+
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dmg_path.clone());
+
+    let out = Command::new("hdiutil")
+        .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
+        .output()?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(IkkError::Store(format!("hdiutil attach failed: {stderr}")));
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mount = stdout
+        .lines()
+        .last()
+        .and_then(|l| l.split_whitespace().last())
+        .ok_or_else(|| IkkError::Store("could not determine dmg mount point".into()))?
+        .to_string();
+
+    // Copy all files from mount to out_dir
+    copy_dir_contents(Path::new(&mount), out_dir)?;
+
+    let _ = Command::new("hdiutil").args(["detach", &mount, "-quiet"]).output();
+
+    set_executable_recursive(out_dir)?;
+    Ok(out_dir.to_path_buf())
+}
+
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(src).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            std::fs::create_dir_all(&dest)?;
+            copy_dir_contents(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest)?;
+        }
+    }
+    Ok(())
+}
+
+fn set_executable_recursive(dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            set_executable_recursive(&path)?;
+        } else {
+            let _ = set_executable(&path);
+        }
+    }
+    Ok(())
 }
 
 fn extract_tar_archive<R: std::io::Read>(
@@ -330,7 +518,7 @@ fn name_match_score(filename: &str, binary_name: &str) -> u32 {
 }
 
 /// Score how likely a file is to be a binary (not data). Higher = more binary-like.
-fn exe_score(filename: &str) -> u32 {
+pub fn exe_score(filename: &str) -> u32 {
     let f = filename.to_lowercase();
     // data files — reject
     for ext in [
