@@ -260,13 +260,21 @@ async fn fetch_template(
             | crate::extract::ArchiveKind::Zip
     );
 
-    if is_archive && let Ok(extracted_dir) = crate::extract::extract_dir(bytes, filename, stage_dir)
-    {
-        let bin_count = crate::extract::count_binaries(&extracted_dir).unwrap_or(0);
-        if bin_count > 1 {
-            tracing::info!("detected multi-binary package ({} binaries)", bin_count);
+    if is_archive {
+        let extracted_dir = crate::extract::extract_dir(bytes, filename, stage_dir)?;
+        let binaries = crate::extract::list_binaries(&extracted_dir)?;
+
+        if binaries.len() > 1 {
+            tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
             return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
         }
+
+        if binaries.len() == 1 {
+            let binary_bytes = std::fs::read(&binaries[0])?;
+            let _ = std::fs::remove_dir_all(&extracted_dir);
+            return Ok((binary_bytes, archive_hash, download_url.to_string(), false));
+        }
+
         let _ = std::fs::remove_dir_all(&extracted_dir);
     }
 
@@ -360,23 +368,28 @@ async fn fetch_forge(
     );
 
     if is_archive {
-        #[allow(clippy::single_match)]
-        match crate::extract::extract_dir(bytes, &asset.name, stage_dir) {
-            Ok(extracted_dir) => {
-                let bin_count = crate::extract::count_binaries(&extracted_dir).unwrap_or(0);
-                if bin_count > 1 {
-                    // Multi-binary package — return directory path as source_url
-                    tracing::info!("detected multi-binary package ({} binaries)", bin_count);
-                    return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
-                }
-                // Single binary — fall through to single extract
-                let _ = std::fs::remove_dir_all(&extracted_dir);
-            }
-            _ => {} // Fallback to single extraction
+        let extracted_dir = crate::extract::extract_dir(bytes, &asset.name, stage_dir)?;
+        let binaries = crate::extract::list_binaries(&extracted_dir)?;
+
+        if binaries.len() > 1 {
+            // Multi-binary package — store full directory tree
+            tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
+            return Ok((vec![], archive_hash, extracted_dir.display().to_string(), true));
         }
+
+        if binaries.len() == 1 {
+            // Single binary — read it directly, no scoring needed
+            let binary_bytes = std::fs::read(&binaries[0])?;
+            let _ = std::fs::remove_dir_all(&extracted_dir);
+            return Ok((binary_bytes, archive_hash, asset.url.clone(), false));
+        }
+
+        // No binaries found — clean up and fall through to single extract as
+        // last resort (handles raw binaries, AppImages, etc.)
+        let _ = std::fs::remove_dir_all(&extracted_dir);
     }
 
-    // Single binary extraction
+    // Raw binary / AppImage / dmg — treat as single file
     let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
     let binary_bytes = std::fs::read(&binary_path)?;
     let _ = std::fs::remove_file(&binary_path);
