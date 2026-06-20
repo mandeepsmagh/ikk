@@ -6,6 +6,7 @@ pub mod info;
 pub mod init;
 pub mod list;
 pub mod remove;
+pub mod run;
 pub mod self_update;
 pub mod sync;
 pub mod uninstall;
@@ -37,7 +38,9 @@ impl Ctx {
         let platform = Platform::current();
         let registry = ConfigRegistry::new(config.remotes.clone());
 
-        let http = reqwest::Client::builder().user_agent("ikk/0.1").build()?;
+        let http = reqwest::Client::builder()
+            .user_agent(format!("ikk/{}", env!("CARGO_PKG_VERSION")))
+            .build()?;
 
         Ok(Self { home: home.clone(), config, lock, store, platform, registry, http })
     }

@@ -2,7 +2,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum IkkError {
-    #[error("no default remote configured — set one with: ikk config set defaults.remote <host>")]
+    #[error("no default remote configured — run 'ikk config set defaults.remote <host>'")]
     NoDefaultRemote,
 
     #[error("unknown remote host '{0}' — add it to [[remotes]] in ~/.ikk/ikk.toml")]
@@ -16,11 +16,11 @@ pub enum IkkError {
     )]
     HashMismatch { name: String, version: String, expected: String, actual: String },
 
-    #[error("package '{0}' not found in ikk.lock")]
+    #[error("package '{0}' not found in config")]
     PackageNotFound(String),
 
-    #[error("source '{0}' requires a host — use owner/repo or set defaults.remote")]
-    AmbiguousSource(String),
+    #[error("malformed URI: {0}")]
+    MalformedUri(String),
 
     #[error("local path not found: {0}")]
     LocalPathNotFound(String),
@@ -33,10 +33,13 @@ pub enum IkkError {
     )]
     ReleaseTooRecent { name: String, version: String, age_days: u64, min_days: u64 },
 
+    #[error("version required for URL template mode — URI contains {{version}} but no version specified")]
+    VersionRequiredForTemplate,
+
     #[error("store error: {0}")]
     Store(String),
 
-    #[error("io error: {0}")]
+    #[error("{0}")]
     Io(#[from] std::io::Error),
 
     #[error("http error: {0}")]

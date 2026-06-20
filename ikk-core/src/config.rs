@@ -5,8 +5,17 @@ use std::path::{Path, PathBuf};
 use crate::error::{IkkError, Result};
 use crate::remote::RemoteConfig;
 
+// ── reserved keys that cannot be package names ──────────────────────────────
+
+const RESERVED: &[&str] = &["defaults", "security", "auth", "store", "remotes"];
+
 // ── top-level config ─────────────────────────────────────────────────────────
 
+/// `~/.ikk/ikk.toml` — what the user wants.
+///
+/// Package entries are top-level keys (e.g. `[ripgrep]`, not `[packages.ripgrep]`).
+/// Known config sections (`defaults`, `security`, `auth`, `store`, `remotes`) are
+/// deserialized explicitly; everything else is captured as a package.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
@@ -19,47 +28,78 @@ pub struct Config {
     pub auth: AuthConfig,
 
     #[serde(default)]
-    pub packages: BTreeMap<String, PackageConfig>,
-
-    #[serde(default)]
     pub store: StoreConfig,
 
-    /// User-defined remotes — appended to built-in defaults, later wins
+    /// User-defined remotes — appended to built-in defaults, later wins.
     #[serde(default)]
     pub remotes: Vec<RemoteConfig>,
+
+    /// Packages keyed by name. Top-level keys in TOML that aren't in the
+    /// reserved set land here via `#[serde(flatten)]`.
+    #[serde(flatten)]
+    pub packages: BTreeMap<String, PackageConfig>,
 }
 
 // ── defaults ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Defaults {
-    /// Default remote host — e.g. "github.com"
-    /// If unset, every source must include a host.
+    /// Default remote host — e.g. "github.com".
+    /// Used to expand shorthand URIs like `owner/repo`.
     pub remote: Option<String>,
+}
+
+// ── package config ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageConfig {
+    /// `https://host/owner/repo`, `https://host/.../{version}-{variant}.tar.gz`,
+    /// `file:///absolute/path`, or shorthand `owner/repo`.
+    pub uri: String,
+
+    /// "latest", exact semver like "14.1.1", or absent (required in template mode).
+    #[serde(default)]
+    pub version: Option<String>,
+
+    /// Variant label — e.g. "cuda12", "cpu".
+    /// Only meaningful when `{variant}` appears in the URI template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+
+    /// Build command list — only for `file://` directory URIs.
+    /// Each entry is a shell command run in the source directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<Vec<String>>,
+
+    /// Binary name inside archive or build output.
+    /// Auto-detected if not set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+
+    /// Expected SHA-256 of the downloaded archive.
+    /// If set, `ikk` verifies after download and aborts on mismatch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 // ── security ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SecurityConfig {
-    /// Minimum age in days before ikk will install a release.
+    /// Minimum age in days before ikk will install a latest release.
     /// Protects against supply chain attacks where a release is
     /// pushed and immediately replaced with a malicious one.
-    /// Default: 0 (disabled). Recommended: 3–7.
+    /// 0 = disabled. Recommended: 3–7.
     #[serde(default)]
     pub min_release_age_days: u64,
 }
 
 impl SecurityConfig {
-    /// Check whether a published_at timestamp is old enough.
-    /// `published_at` should be an ISO 8601 string (e.g. "2024-01-15T10:30:00Z").
-    /// Returns true if the check is disabled (days = 0) or if the release is old enough.
     pub fn is_old_enough(&self, published_at: Option<&str>) -> bool {
         if self.min_release_age_days == 0 {
             return true;
         }
         let Some(ts) = published_at else {
-            // can't determine age — reject latest, require pinned version
             return false;
         };
         let Some(release_age_days) = days_since_iso8601(ts) else {
@@ -70,7 +110,6 @@ impl SecurityConfig {
 }
 
 /// Parse an ISO 8601 date string and return approximate days since epoch.
-/// Handles formats like "2024-01-15T10:30:00Z" and "2024-01-15".
 pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
     let date_part = s.split('T').next()?;
     let mut parts = date_part.split('-');
@@ -80,14 +119,12 @@ pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    // days since unix epoch using civil-date arithmetic
     let days = days_from_civil(year, month, day)?;
     let now_days = days_from_civil_utc_now()?;
     Some(now_days.saturating_sub(days))
 }
 
 fn days_from_civil(mut y: i64, m: u32, d: u32) -> Option<u64> {
-    // algorithm from Howard Hinnant — requires March-based months (Mar=3..Feb=14)
     let mut m = m as i64;
     if m <= 2 {
         y -= 1;
@@ -111,32 +148,23 @@ fn days_from_civil_utc_now() -> Option<u64> {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
-    /// Per-host token configuration.
-    /// Token values are NEVER stored here — only the env var name to read from.
-    ///
-    /// [auth.tokens]
-    /// "github.com"   = { env = "GITHUB_TOKEN" }
-    /// "gitlab.com"   = { env = "GITLAB_TOKEN" }
     #[serde(default)]
     pub tokens: BTreeMap<String, TokenConfig>,
 
     /// SSH key path for git clone of private repos (build from source).
-    /// Default: ~/.ssh/id_ed25519
     pub ssh_key: Option<PathBuf>,
 
-    /// SSH key passphrase env var name — never store the passphrase itself.
+    /// SSH key passphrase env var name.
     pub ssh_passphrase_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenConfig {
     /// Name of the environment variable holding the token.
-    /// Token is read at runtime, never stored in config.
     pub env: String,
 }
 
 impl AuthConfig {
-    /// Resolve token for a given host — reads from env at call time.
     pub fn token_for(&self, host: &str) -> Option<String> {
         self.tokens.get(host).and_then(|t| std::env::var(&t.env).ok())
     }
@@ -148,7 +176,7 @@ impl AuthConfig {
     }
 }
 
-// ── store config ────────────────────────────────────────────────────────────
+// ── store config ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreConfig {
@@ -157,119 +185,135 @@ pub struct StoreConfig {
     pub path: Option<PathBuf>,
 }
 
-// ── package config ────────────────────────────────────────────────────────────
+// ── package mode ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageConfig {
-    /// Source — any of:
-    ///   "owner/repo"                     uses defaults.remote
-    ///   "github.com/owner/repo"          explicit host, no scheme
-    ///   "https://github.com/owner/repo"  full URL
-    ///   "~/path/to/file.tar.gz"          local archive
-    ///   "~/path/to/dir"                  local build from source
-    pub source: String,
-
-    /// "latest" or exact semver e.g. "14.1.1"
-    #[serde(default = "default_version")]
-    pub version: String,
-
-    /// Binary name inside archive — auto-detected if not set.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binary: Option<String>,
-
-    /// Build config — only for local source directories or build-from-source.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build: Option<BuildConfig>,
-
-    /// Override global min_release_age_days for this package.
-    /// Set to 0 to always allow the latest release immediately.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_release_age_days: Option<u64>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageMode {
+    /// `https://host/owner/repo` or shorthand `owner/repo` — use forge API.
+    ForgeDiscovery,
+    /// `https://...` URI contains `{version}` — direct download with string substitution.
+    UrlTemplate,
+    /// `file:///path/to/binary` — link as-is.
+    LocalBinary,
+    /// `file:///path/to/source` with `build = [...]` — build then link.
+    LocalBuild,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuildConfig {
-    pub system: BuildSystem,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub script: Option<String>,
-}
+impl PackageMode {
+    /// Classify a URI (raw, before shorthand expansion) and optional build field.
+    pub fn classify(uri: &str, default_remote: Option<&str>, has_build: bool) -> Result<Self> {
+        // Shorthand — no scheme, no leading / or ~/
+        if !uri.contains("://") && !uri.starts_with('/') && !uri.starts_with("~/") {
+            let slash_count = uri.matches('/').count();
+            if slash_count == 1 {
+                // owner/repo — needs default remote
+                if default_remote.is_none() {
+                    return Err(IkkError::NoDefaultRemote);
+                }
+                return Ok(PackageMode::ForgeDiscovery);
+            }
+            if slash_count >= 2 {
+                // host/owner/repo — self-contained
+                return Ok(PackageMode::ForgeDiscovery);
+            }
+        }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BuildSystem {
-    Cargo,
-    Make,
-    Cmake,
-    Script,
-}
+        let url = url::Url::parse(uri)
+            .map_err(|e| IkkError::MalformedUri(format!("invalid URI: {e}")))?;
 
-fn default_version() -> String {
-    "latest".into()
+        match url.scheme() {
+            "https" | "http" => {
+                if uri.contains("{version}") {
+                    Ok(PackageMode::UrlTemplate)
+                } else {
+                    Ok(PackageMode::ForgeDiscovery)
+                }
+            }
+            "file" => {
+                if has_build {
+                    Ok(PackageMode::LocalBuild)
+                } else {
+                    Ok(PackageMode::LocalBinary)
+                }
+            }
+            _ => Err(IkkError::MalformedUri(format!("unsupported URI scheme: {}", url.scheme()))),
+        }
+    }
 }
 
 // ── impl ──────────────────────────────────────────────────────────────────────
 
 impl Config {
+    /// Load from disk. Returns defaults if file does not exist.
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
         let s = std::fs::read_to_string(path)?;
-        toml::from_str(&s).map_err(|e| IkkError::Toml(e.to_string()))
+        let config: Config =
+            toml::from_str(&s).map_err(|e| IkkError::Toml(format!("ikk.toml: {e}")))?;
+        config.validate()?;
+        Ok(config)
     }
 
+    /// Save to disk (creates parent dirs).
     pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let s = toml::to_string_pretty(self).map_err(|e| IkkError::Toml(e.to_string()))?;
+        let s = toml::to_string_pretty(self)
+            .map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
         std::fs::write(path, s)?;
         Ok(())
     }
 
-    pub fn resolve_source(&self, source: &str) -> Result<url::Url> {
-        resolve_source_url(source, self.defaults.remote.as_deref())
-    }
-}
-
-/// Resolve source string → full URL.
-/// https://...          → use as-is
-/// ~/... or /...        → file:// URL (local)
-/// host/owner/repo      → https://host/owner/repo
-/// owner/repo           → https://<default_remote>/owner/repo
-pub fn resolve_source_url(source: &str, default_remote: Option<&str>) -> Result<url::Url> {
-    if source.starts_with("https://") || source.starts_with("http://") {
-        return url::Url::parse(source).map_err(|e| IkkError::AmbiguousSource(e.to_string()));
+    /// Check that no package name collides with a reserved config key.
+    fn validate(&self) -> Result<()> {
+        for name in self.packages.keys() {
+            if RESERVED.contains(&name.as_str()) {
+                return Err(IkkError::Toml(format!(
+                    "'{name}' is a reserved config section name — use a different package name"
+                )));
+            }
+        }
+        Ok(())
     }
 
-    if source.starts_with("~/") || source.starts_with('/') {
-        let expanded = if let Some(stripped) = source.strip_prefix("~/") {
-            dirs::home_dir()
-                .ok_or_else(|| IkkError::Store("cannot determine home directory".into()))?
-                .join(stripped)
-        } else {
-            PathBuf::from(source)
-        };
-        return url::Url::from_file_path(&expanded)
-            .map_err(|_| IkkError::LocalPathNotFound(source.to_string()));
+    /// Expand shorthand URIs to full URLs.
+    /// `owner/repo` → `https://{default}.remote/owner/repo`
+    /// `host/owner/repo` → `https://host/owner/repo`
+    pub fn expand_uri(uri: &str, default_remote: Option<&str>) -> String {
+        if uri.contains("://") || uri.starts_with('/') || uri.starts_with("~/") {
+            return uri.to_string();
+        }
+        // Shorthand: owner/repo or host/owner/repo
+        let slash_count = uri.matches('/').count();
+        if slash_count >= 1 {
+            if slash_count == 1 {
+                // owner/repo — prepend default remote
+                if let Some(remote) = default_remote {
+                    return format!("https://{remote}/{uri}");
+                }
+            } else {
+                // host/owner/repo — just prefix scheme
+                return format!("https://{uri}");
+            }
+        }
+        uri.to_string()
     }
 
-    let slash_count = source.matches('/').count();
-
-    if slash_count == 1 {
-        let remote = default_remote.ok_or(IkkError::NoDefaultRemote)?;
-        return url::Url::parse(&format!("https://{remote}/{source}"))
-            .map_err(|e| IkkError::AmbiguousSource(e.to_string()));
+    /// Resolve a package URI to a full `url::Url`, expanding shorthand if needed.
+    pub fn resolve_uri(&self, uri: &str) -> Result<url::Url> {
+        let expanded = Self::expand_uri(uri, self.defaults.remote.as_deref());
+        url::Url::parse(&expanded)
+            .map_err(|e| IkkError::MalformedUri(format!("{expanded}: {e}")))
     }
 
-    if slash_count >= 2 {
-        return url::Url::parse(&format!("https://{source}"))
-            .map_err(|e| IkkError::AmbiguousSource(e.to_string()));
+    /// Get a package config by name.
+    pub fn get_package(&self, name: &str) -> Option<&PackageConfig> {
+        self.packages.get(name)
     }
-
-    Err(IkkError::AmbiguousSource(source.to_string()))
 }
 
 #[cfg(test)]
@@ -277,31 +321,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_full_url() {
-        let url = resolve_source_url("https://github.com/foo/bar", None).unwrap();
-        assert_eq!(url.as_str(), "https://github.com/foo/bar");
+    fn expand_shorthand() {
+        assert_eq!(
+            Config::expand_uri("foo/bar", Some("github.com")),
+            "https://github.com/foo/bar"
+        );
+        assert_eq!(
+            Config::expand_uri("codeberg.org/helix/helix", None),
+            "https://codeberg.org/helix/helix"
+        );
+        assert_eq!(
+            Config::expand_uri("https://example.com/tool.tar.gz", None),
+            "https://example.com/tool.tar.gz"
+        );
+        assert_eq!(
+            Config::expand_uri("/usr/local/bin/tool", None),
+            "/usr/local/bin/tool"
+        );
     }
 
     #[test]
-    fn resolve_owner_repo_with_default_remote() {
-        let url = resolve_source_url("foo/bar", Some("github.com")).unwrap();
-        assert_eq!(url.as_str(), "https://github.com/foo/bar");
+    fn classify_modes() {
+        assert_eq!(
+            PackageMode::classify("foo/bar", Some("github.com"), false).unwrap(),
+            PackageMode::ForgeDiscovery
+        );
+        assert_eq!(
+            PackageMode::classify("codeberg.org/helix/helix", None, false).unwrap(),
+            PackageMode::ForgeDiscovery
+        );
+        assert_eq!(
+            PackageMode::classify(
+                "https://example.com/tool-{version}.tar.gz",
+                None,
+                false
+            )
+            .unwrap(),
+            PackageMode::UrlTemplate
+        );
+        assert_eq!(
+            PackageMode::classify("https://github.com/foo/bar", None, false).unwrap(),
+            PackageMode::ForgeDiscovery
+        );
+        assert_eq!(
+            PackageMode::classify("file:///tmp/tool", None, false).unwrap(),
+            PackageMode::LocalBinary
+        );
+        assert_eq!(
+            PackageMode::classify("file:///tmp/project", None, true).unwrap(),
+            PackageMode::LocalBuild
+        );
     }
 
     #[test]
-    fn resolve_host_owner_repo() {
-        let url = resolve_source_url("codeberg.org/helix/helix", None).unwrap();
-        assert_eq!(url.as_str(), "https://codeberg.org/helix/helix");
-    }
-
-    #[test]
-    fn resolve_owner_repo_without_default_fails() {
-        assert!(resolve_source_url("foo/bar", None).is_err());
+    fn classify_shorthand_without_default_remote_fails() {
+        assert!(PackageMode::classify("foo/bar", None, false).is_err());
     }
 
     #[test]
     fn days_since_iso8601_known_date() {
-        // 2024-01-15 was roughly 890 days ago at time of writing, but we just check it's positive
         let days = days_since_iso8601("2024-01-15T10:30:00Z").unwrap();
         assert!(days > 365, "should be more than a year ago");
     }
@@ -326,5 +404,48 @@ mod tests {
     fn is_old_enough_no_timestamp_rejected() {
         let sec = SecurityConfig { min_release_age_days: 3 };
         assert!(!sec.is_old_enough(None));
+    }
+
+    #[test]
+    fn deserialize_top_level_packages() {
+        let toml = r#"
+[defaults]
+remote = "github.com"
+
+[ripgrep]
+uri = "BurntSushi/ripgrep"
+version = "14.1.1"
+
+[fd]
+uri = "sharkdp/fd"
+binary = "fd"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.defaults.remote.as_deref(), Some("github.com"));
+        assert_eq!(config.packages.len(), 2);
+        assert_eq!(config.packages["ripgrep"].uri, "BurntSushi/ripgrep");
+        assert_eq!(config.packages["ripgrep"].version.as_deref(), Some("14.1.1"));
+        assert_eq!(config.packages["fd"].binary.as_deref(), Some("fd"));
+        assert!(config.packages["fd"].version.is_none());
+    }
+
+    #[test]
+    fn reserved_name_rejected() {
+        let toml = r#"
+[defaults]
+remote = "github.com"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        // Insert a package with reserved name programmatically
+        let mut config = config;
+        config.packages.insert("defaults".into(), PackageConfig {
+            uri: "foo/bar".into(),
+            version: None,
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        });
+        assert!(config.validate().is_err());
     }
 }

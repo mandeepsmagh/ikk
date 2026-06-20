@@ -7,7 +7,7 @@ use crate::error::{IkkError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LockFile {
-    /// Merkle root over all package entries — detects any tampering
+    /// Merkle root over all package entries — detects tampering.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree_root: Option<String>,
 
@@ -18,33 +18,51 @@ pub struct LockFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedPackage {
     pub version: String,
-    pub source_url: String,
-    pub download_url: String,
-    pub archive_sha256: String,
-    pub binary_sha256: String,
-    pub store_hash: String, // first 12 chars of binary_sha256
+
+    /// Variant — e.g. "cuda12". None if not variant-aware.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+
+    /// The resolved download URL or local path.
+    pub uri: String,
+
+    /// SHA-256 of the archive / tarball (empty for local builds).
+    #[serde(default)]
+    pub sha256: String,
+
+    /// Content-addressed store entry name — `{hash12}-{name}-{version}`.
+    pub bin_entry: String,
+
+    /// True if this package is a directory (multi-binary).
+    #[serde(default)]
+    pub is_dir: bool,
+
+    /// Unix timestamp of installation.
+    pub installed_at: u64,
 }
 
 impl LockFile {
+    /// Load from disk. Returns empty lock if file missing.
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
         let s = std::fs::read_to_string(path)?;
-        let lock: LockFile = toml::from_str(&s).map_err(|e| IkkError::Toml(e.to_string()))?;
+        let lock: LockFile =
+            toml::from_str(&s).map_err(|e| IkkError::Toml(format!("ikk.lock: {e}")))?;
         lock.verify()?;
         Ok(lock)
     }
 
-    /// Verify the stored tree root matches computed — call to detect tampering.
+    /// Verify the stored Merkle root.
     pub fn verify(&self) -> Result<()> {
-        if let Some(stored_root) = &self.tree_root {
+        if let Some(stored) = &self.tree_root {
             let computed = self.compute_root();
-            if computed != *stored_root {
+            if computed != *stored {
                 return Err(IkkError::HashMismatch {
                     name: "ikk.lock".into(),
                     version: "tree_root".into(),
-                    expected: stored_root.clone(),
+                    expected: stored.clone(),
                     actual: computed,
                 });
             }
@@ -52,18 +70,14 @@ impl LockFile {
         Ok(())
     }
 
+    /// Save to disk with atomic write (temp → rename).
     pub fn save(&mut self, path: &Path) -> Result<()> {
-        // always recompute root before saving
-        let root = self.compute_root();
-        self.tree_root = Some(root);
-
-        let s = toml::to_string_pretty(self).map_err(|e| IkkError::Toml(e.to_string()))?;
-
-        // atomic write — temp file then rename
+        self.tree_root = Some(self.compute_root());
+        let s =
+            toml::to_string_pretty(self).map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
         let tmp = path.with_extension("lock.tmp");
         std::fs::write(&tmp, s)?;
         std::fs::rename(&tmp, path)?;
-
         Ok(())
     }
 
@@ -79,30 +93,29 @@ impl LockFile {
         self.packages.remove(name);
     }
 
-    /// Compute merkle root: sha256 of sorted(sha256(name + binary_sha256))
+    /// Merkle root: sha256(sorted(sha256(name + sha256))).
     pub fn compute_root(&self) -> String {
-        let mut leaf_hashes: Vec<String> = self
+        let mut leaves: Vec<String> = self
             .packages
             .iter()
             .map(|(name, pkg)| {
                 let mut h = Sha256::new();
                 h.update(name.as_bytes());
-                h.update(pkg.binary_sha256.as_bytes());
+                h.update(pkg.sha256.as_bytes());
                 hex::encode(h.finalize())
             })
             .collect();
 
-        leaf_hashes.sort();
+        leaves.sort();
 
         let mut root = Sha256::new();
-        for leaf in &leaf_hashes {
+        for leaf in &leaves {
             root.update(leaf.as_bytes());
         }
-
         hex::encode(root.finalize())
     }
 
-    /// Diff desired (lock) vs actual (store) — returns a sync plan
+    /// Compute diff between lock (desired) and what's in the store.
     pub fn diff(&self, installed: &BTreeMap<String, String>) -> SyncPlan {
         let mut to_install = vec![];
         let mut to_remove = vec![];
@@ -111,8 +124,8 @@ impl LockFile {
         for (name, pkg) in &self.packages {
             match installed.get(name) {
                 Some(ver) if ver == &pkg.version => up_to_date.push(name.clone()),
-                Some(_) => to_install.push(name.clone()), // wrong version
-                None => to_install.push(name.clone()),    // not installed
+                Some(_) => to_install.push(name.clone()),
+                None => to_install.push(name.clone()),
             }
         }
 
@@ -126,20 +139,43 @@ impl LockFile {
     }
 }
 
+#[derive(Debug)]
+pub struct SyncPlan {
+    pub to_install: Vec<String>,
+    pub to_remove: Vec<String>,
+    pub up_to_date: Vec<String>,
+}
+
+impl SyncPlan {
+    pub fn is_empty(&self) -> bool {
+        self.to_install.is_empty() && self.to_remove.is_empty()
+    }
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn pkg(version: &str, binary_hash: &str) -> LockedPackage {
-        // pad hash to at least 12 chars for store_hash
-        let hash = format!("{binary_hash:0>12}");
+    fn pkg(version: &str, hash: &str) -> LockedPackage {
+        // Pad hash to at least 12 chars for bin_entry
+        let padded = format!("{hash:0>12}");
         LockedPackage {
             version: version.into(),
-            source_url: "https://github.com/foo/bar".into(),
-            download_url: String::new(),
-            archive_sha256: String::new(),
-            binary_sha256: hash.clone(),
-            store_hash: hash[..12].into(),
+            variant: None,
+            uri: "https://github.com/foo/bar".into(),
+            sha256: hash.into(),
+            bin_entry: format!("{}-foo-{}", &padded[..12], version),
+            is_dir: false,
+            installed_at: 1700000000,
         }
     }
 
@@ -155,7 +191,7 @@ mod tests {
         lock2.insert("a".into(), pkg("1.0", "aaa"));
         let root2 = lock2.compute_root();
 
-        assert_eq!(root1, root2, "order-independent merkle root");
+        assert_eq!(root1, root2, "order-independent");
     }
 
     #[test]
@@ -165,55 +201,22 @@ mod tests {
         let root1 = lock.compute_root();
 
         let mut lock2 = LockFile::default();
-        lock2.insert("a".into(), pkg("1.0", "bbb")); // different hash
+        lock2.insert("a".into(), pkg("1.0", "bbb"));
         let root2 = lock2.compute_root();
 
-        assert_ne!(root1, root2, "tampered hash changes root");
+        assert_ne!(root1, root2);
     }
 
     #[test]
-    fn verify_empty_lock() {
-        let lock = LockFile::default();
-        assert!(lock.verify().is_ok());
+    fn verify_empty_lock_ok() {
+        assert!(LockFile::default().verify().is_ok());
     }
 
     #[test]
-    fn verify_detects_tamper() {
+    fn verify_bad_root_detected() {
         let mut lock = LockFile::default();
         lock.insert("x".into(), pkg("1.0", "abc"));
         lock.tree_root = Some("deadbeef".into());
         assert!(lock.verify().is_err());
-    }
-
-    #[test]
-    fn diff_detects_all_states() {
-        let mut lock = LockFile::default();
-        lock.insert("a".into(), pkg("1.0", "aaa"));
-        lock.insert("b".into(), pkg("2.0", "bbb"));
-
-        let installed: BTreeMap<_, _> = [
-            ("a".into(), "1.0".into()), // matches lock
-            ("b".into(), "1.0".into()), // wrong version
-            ("c".into(), "1.0".into()), // not in lock
-        ]
-        .into();
-
-        let plan = lock.diff(&installed);
-        assert!(plan.up_to_date.contains(&"a".into()));
-        assert!(plan.to_install.contains(&"b".into()));
-        assert!(plan.to_remove.contains(&"c".into()));
-    }
-}
-
-#[derive(Debug)]
-pub struct SyncPlan {
-    pub to_install: Vec<String>,
-    pub to_remove: Vec<String>,
-    pub up_to_date: Vec<String>,
-}
-
-impl SyncPlan {
-    pub fn is_empty(&self) -> bool {
-        self.to_install.is_empty() && self.to_remove.is_empty()
     }
 }

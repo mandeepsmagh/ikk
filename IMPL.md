@@ -153,33 +153,33 @@ Goal: full Windows support. UX polish. Remaining CLI commands.
 
 ```
 Stage 0 — Scaffold
-[ ] 0.1   Cargo workspace
-[ ] 0.2   IkkHome dirs
-[ ] 0.3   ConfigFile with #[serde(flatten)]
-[ ] 0.4   PackageConfig fields
-[ ] 0.5   Reserved name validation
-[ ] 0.6   Mode enum
-[ ] 0.7   IkkError
-[ ] 0.8   LockFile struct
-[ ] 0.9   LockedPackage fields
-[ ] 0.10  CLI entrypoint
+[x] 0.1   Cargo workspace
+[x] 0.2   IkkHome dirs
+[x] 0.3   ConfigFile with #[serde(flatten)]
+[x] 0.4   PackageConfig fields
+[x] 0.5   Reserved name validation
+[x] 0.6   Mode enum
+[x] 0.7   IkkError
+[x] 0.8   LockFile struct
+[x] 0.9   LockedPackage fields
+[x] 0.10  CLI entrypoint
 
 Stage 1 — Install Core (Forge Discovery)
-[ ] 1.1   RemotesRegistry
-[ ] 1.2   ConfiguredRemote
-[ ] 1.3   URI expansion
-[ ] 1.4   Platform detection
-[ ] 1.5   best_asset scoring
-[ ] 1.6   Download
-[ ] 1.7   SHA-256 verify
-[ ] 1.8   Archive extraction
-[ ] 1.9   Binary hash
-[ ] 1.10  Store::insert
-[ ] 1.11  Store::remove
-[ ] 1.12  Symlink in bin/
-[ ] 1.13  Lock write
-[ ] 1.14  CLI ikk install
-[ ] 1.15  Integration test
+[x] 1.1   RemotesRegistry
+[x] 1.2   ConfiguredRemote
+[x] 1.3   URI expansion
+[x] 1.4   Platform detection
+[x] 1.5   best_asset scoring
+[x] 1.6   Download
+[x] 1.7   SHA-256 verify
+[x] 1.8   Archive extraction
+[x] 1.9   Binary hash
+[x] 1.10  Store::insert
+[x] 1.11  Store::remove
+[x] 1.12  Symlink in bin/
+[x] 1.13  Lock write
+[x] 1.14  CLI ikk install
+[x] 1.15  Integration test
 
 Stage 2 — URL Template Mode
 [ ] 2.1   {version} substitution

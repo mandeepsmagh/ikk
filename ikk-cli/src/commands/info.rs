@@ -19,15 +19,22 @@ pub fn run(args: InfoArgs, home: &IkkHome) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("'{}' not found in config", args.name))?;
 
     println!("package:  {}", args.name);
-    println!("source:   {}", pkg.source);
-    println!("version:  {}", pkg.version);
+    println!("uri:      {}", pkg.uri);
+    println!("version:  {}", pkg.version.as_deref().unwrap_or("latest"));
+
+    if let Some(v) = &pkg.variant {
+        println!("variant:  {v}");
+    }
 
     if let Some(locked) = ctx.lock.get(&args.name) {
         println!("\ninstalled:");
         println!("  version:  {}", locked.version);
-        println!("  url:      {}", locked.download_url);
-        println!("  archive:  {}", locked.archive_sha256);
-        println!("  binary:   {}", locked.binary_sha256);
+        if let Some(v) = &locked.variant {
+            println!("  variant:  {v}");
+        }
+        println!("  url:      {}", locked.uri);
+        println!("  sha256:   {}", locked.sha256);
+        println!("  entry:    {}", locked.bin_entry);
     } else {
         println!("\nnot yet installed — run 'ikk sync'");
     }

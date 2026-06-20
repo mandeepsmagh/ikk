@@ -18,30 +18,31 @@ pub fn run(args: GcArgs, home: &IkkHome) -> Result<()> {
     let mut removed = 0;
 
     for entry in std::fs::read_dir(&store_dir)?.filter_map(|e| e.ok()) {
-        let fname = entry.file_name().to_string_lossy().to_string();
-        let hash = fname.split('-').next().unwrap_or("").to_string();
+        let entry_name = entry.file_name().to_string_lossy().to_string();
 
-        // check if any locked package references this store hash
-        let in_use = ctx.lock.packages.values().any(|p| p.store_hash == hash);
+        // Check if any locked package references this entry
+        let in_use = ctx
+            .lock
+            .packages
+            .values()
+            .any(|p| p.bin_entry == entry_name);
 
         if in_use {
             kept += 1;
+        } else if args.dry_run {
+            println!("  would remove {}", entry.path().display());
+            removed += 1;
         } else {
-            if args.dry_run {
-                println!("  would remove {}", entry.path().display());
-            } else {
-                // unseal directory first
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        entry.path(),
-                        std::fs::Permissions::from_mode(0o755),
-                    );
-                }
-                std::fs::remove_dir_all(entry.path())?;
-                println!("  removed {}", entry.path().display());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    entry.path(),
+                    std::fs::Permissions::from_mode(0o755),
+                );
             }
+            std::fs::remove_dir_all(entry.path())?;
+            println!("  removed {}", entry.path().display());
             removed += 1;
         }
     }
