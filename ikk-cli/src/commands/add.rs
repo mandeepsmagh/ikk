@@ -16,8 +16,8 @@ pub struct AddArgs {
     /// Package name (e.g. "ripgrep")
     pub name: String,
 
-    /// URI: owner/repo, https://host/owner/repo, https://.../{version}-{variant}.tar.gz,
-    /// or file:///path
+    /// URI: `owner/repo`, `<https://host/owner/repo>`,
+    /// `<https://.../{version}-{variant}.tar.gz>`, or `<file:///path>`
     #[arg(long)]
     pub uri: String,
 

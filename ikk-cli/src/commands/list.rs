@@ -54,7 +54,7 @@ fn print_details(name: &str, ctx: &Ctx) -> Result<()> {
         .config
         .packages
         .get(name)
-        .ok_or_else(|| anyhow::anyhow!("'{}' not found in config", name))?;
+        .ok_or_else(|| anyhow::anyhow!("'{name}' not found in config"))?;
 
     println!("package:   {name}");
     println!("uri:       {}", pkg.uri);

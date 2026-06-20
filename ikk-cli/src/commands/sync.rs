@@ -14,95 +14,80 @@ pub async fn run(_args: SyncArgs, home: &IkkHome) -> Result<()> {
     let mut ctx = Ctx::load(home)?;
 
     let mut installed = vec![];
-    let mut removed = vec![];
-    let unchanged: Vec<String> = vec![];
     let mut failed = vec![];
 
     for (name, pkg) in ctx.config.packages.clone() {
-        let mode = PackageMode::classify(
-            &pkg.uri,
-            ctx.config.defaults.remote.as_deref(),
-            pkg.build.is_some(),
-        );
-
-        let mode = match mode {
-            Ok(m) => m,
-            Err(e) => {
-                failed.push((name, e.to_string()));
-                continue;
-            }
-        };
-
-        match mode {
-            PackageMode::ForgeDiscovery => {
-                let url = match ctx.config.resolve_uri(&pkg.uri) {
-                    Ok(u) => u,
-                    Err(e) => {
-                        failed.push((name, e.to_string()));
-                        continue;
-                    }
-                };
-
-                let remote = match ctx.registry.remote_for(&url) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        failed.push((name, e.to_string()));
-                        continue;
-                    }
-                };
-
-                let req = ops::InstallRequest {
-                    name: &name,
-                    pkg: &pkg,
-                    config: &ctx.config,
-                    platform: &ctx.platform,
-                    home: &ctx.home,
-                };
-
-                match ops::install(
-                    &req,
-                    &*remote,
-                    &ctx.http,
-                    &ctx.config.security,
-                    &ctx.store,
-                    &mut ctx.lock,
-                )
-                .await
-                {
-                    Ok(()) => installed.push(name),
-                    Err(e) => failed.push((name, e.to_string())),
-                }
-            }
-            PackageMode::UrlTemplate => {
-                let req = ops::InstallRequest {
-                    name: &name,
-                    pkg: &pkg,
-                    config: &ctx.config,
-                    platform: &ctx.platform,
-                    home: &ctx.home,
-                };
-                match ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await {
-                    Ok(()) => installed.push(name),
-                    Err(e) => failed.push((name, e.to_string())),
-                }
-            }
-            PackageMode::LocalBinary | PackageMode::LocalBuild => {
-                let req = ops::InstallRequest {
-                    name: &name,
-                    pkg: &pkg,
-                    config: &ctx.config,
-                    platform: &ctx.platform,
-                    home: &ctx.home,
-                };
-                match ops::install_local(&req, &ctx.store, &mut ctx.lock) {
-                    Ok(()) => installed.push(name),
-                    Err(e) => failed.push((name, e.to_string())),
-                }
-            }
+        match sync_package(&name, &pkg, &mut ctx).await {
+            Ok(true) => installed.push(name),
+            Ok(false) => {}
+            Err(e) => failed.push((name, e.to_string())),
         }
     }
 
-    // Remove packages in lock but not in config
+    let removed = remove_stale(&mut ctx)?;
+    ctx.lock.save(&home.lock_file())?;
+
+    print_report(&installed, &removed, &failed)
+}
+
+async fn sync_package(
+    name: &str,
+    pkg: &ikk_core::config::PackageConfig,
+    ctx: &mut Ctx,
+) -> Result<bool> {
+    let mode = PackageMode::classify(
+        &pkg.uri,
+        ctx.config.defaults.remote.as_deref(),
+        pkg.build.is_some(),
+    )?;
+
+    match mode {
+        PackageMode::ForgeDiscovery => {
+            let url = ctx.config.resolve_uri(&pkg.uri)?;
+            let remote = ctx.registry.remote_for(&url)?;
+            let req = ops::InstallRequest {
+                name,
+                pkg,
+                config: &ctx.config,
+                platform: &ctx.platform,
+                home: &ctx.home,
+            };
+            ops::install(
+                &req,
+                &*remote,
+                &ctx.http,
+                &ctx.config.security,
+                &ctx.store,
+                &mut ctx.lock,
+            )
+            .await?;
+        }
+        PackageMode::UrlTemplate => {
+            let req = ops::InstallRequest {
+                name,
+                pkg,
+                config: &ctx.config,
+                platform: &ctx.platform,
+                home: &ctx.home,
+            };
+            ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await?;
+        }
+        PackageMode::LocalBinary | PackageMode::LocalBuild => {
+            let req = ops::InstallRequest {
+                name,
+                pkg,
+                config: &ctx.config,
+                platform: &ctx.platform,
+                home: &ctx.home,
+            };
+            ops::install_local(&req, &ctx.store, &mut ctx.lock)?;
+        }
+    }
+    Ok(true)
+}
+
+fn remove_stale(ctx: &mut Ctx) -> Result<Vec<String>> {
+    let mut removed = vec![];
     let to_remove: Vec<_> = ctx
         .lock
         .packages
@@ -118,35 +103,31 @@ pub async fn run(_args: SyncArgs, home: &IkkHome) -> Result<()> {
             .get(&name)
             .and_then(|p| p.binary.clone())
             .unwrap_or_else(|| name.clone());
-
-        match ops::remove(&name, &binary, &ctx.home, &ctx.store, &mut ctx.lock) {
-            Ok(()) => removed.push(name),
-            Err(e) => failed.push((name, e.to_string())),
-        }
+        ops::remove(&name, &binary, &ctx.home, &ctx.store, &mut ctx.lock)?;
+        removed.push(name);
     }
+    Ok(removed)
+}
 
-    ctx.lock.save(&home.lock_file())?;
-
-    for name in &installed {
+fn print_report(
+    installed: &[String],
+    removed: &[String],
+    failed: &[(String, String)],
+) -> Result<()> {
+    for name in installed {
         println!("  installed {name}");
     }
-    for name in &removed {
+    for name in removed {
         println!("  removed {name}");
     }
-    for name in &unchanged {
-        println!("  up to date {name}");
-    }
-
     if !failed.is_empty() {
-        for (name, err) in &failed {
+        for (name, err) in failed {
             eprintln!("  error {name}: {err}");
         }
         anyhow::bail!("{} package(s) failed", failed.len());
     }
-
     if installed.is_empty() && removed.is_empty() {
         println!("already in sync");
     }
-
     Ok(())
 }

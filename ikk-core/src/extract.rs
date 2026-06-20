@@ -560,11 +560,11 @@ pub fn exe_score(filename: &str) -> u32 {
     50
 }
 
-fn set_executable(_path: &Path) {
+fn set_executable(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
     }
 }
 

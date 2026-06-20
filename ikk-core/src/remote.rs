@@ -112,11 +112,13 @@ impl ConfiguredRemote {
 
         let prerelease = self
             .extract(json, &self.config.prerelease_path)
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
-        let draft =
-            self.extract(json, &self.config.draft_path).and_then(|v| v.as_bool()).unwrap_or(false);
+        let draft = self
+            .extract(json, &self.config.draft_path)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
 
         let published_at = self
             .config
@@ -166,11 +168,11 @@ impl Remote for ConfiguredRemote {
                     arr.iter().find(|r| {
                         let pre = self
                             .extract(r, &self.config.prerelease_path)
-                            .and_then(|v| v.as_bool())
+                            .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false);
                         let draft = self
                             .extract(r, &self.config.draft_path)
-                            .and_then(|v| v.as_bool())
+                            .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false);
                         !pre && !draft
                     })
@@ -223,6 +225,7 @@ pub trait RemoteRegistry: Send + Sync {
 /// Handles: https://github.com/owner/repo
 ///          https://gitlab.com/owner/repo
 ///          https://codeberg.org/owner/repo/anything-else
+#[must_use]
 pub fn owner_repo_from_url(url: &Url) -> Option<(String, String)> {
     let mut parts = url.path_segments()?;
     let owner = parts.next()?.to_string();

@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
     };
 
     match cli.command {
-        Command::Init(args) => init::run(args, &home).await,
+        Command::Init(args) => init::run(args, &home),
         Command::Install(args) => add::run(args, &home).await,
         Command::Sync(args) => sync::run(args, &home).await,
         Command::Remove(args) => remove::run(args, &home),

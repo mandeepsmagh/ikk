@@ -18,7 +18,7 @@ pub enum ConfigAction {
 
 #[derive(Args)]
 pub struct GetArgs {
-    /// Config key (e.g. defaults.remote, security.min_release_age_days)
+    /// Config key (e.g. `defaults.remote`, `security.min_release_age_days`)
     pub key: String,
 }
 

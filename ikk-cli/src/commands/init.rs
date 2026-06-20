@@ -46,33 +46,28 @@ impl From<ShellArg> for Shell {
     }
 }
 
-pub async fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
-    // Create directory layout
+pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
     home.init_dirs()?;
 
-    // Resolve default remote
     let remote =
         if args.silent { args.remote.clone() } else { prompt_remote(args.remote.as_deref())? };
 
-    // Write config if not already present
     let config_path = home.config_file();
-    if !config_path.exists() {
+    if config_path.exists() {
+        println!("config already exists — skipping");
+    } else {
         let mut config = Config::default();
-        config.defaults.remote = remote.clone();
+        config.defaults.remote.clone_from(&remote);
         config.save(&config_path)?;
         println!("created {}", config_path.display());
-    } else {
-        println!("config already exists — skipping");
     }
 
-    // Shell integration
     if !args.no_shell {
-        let shell = args.shell.map(Shell::from).unwrap_or_else(Shell::detect);
-        match install_path_integration(&shell, &home.bin_dir())? {
-            true => {
-                println!("added {} to PATH in {:?}", home.bin_dir().display(), shell.rc_file())
-            }
-            false => println!("PATH already configured"),
+        let shell = args.shell.map_or_else(Shell::detect, Shell::from);
+        if install_path_integration(&shell, &home.bin_dir())? {
+            println!("added {} to PATH in {:?}", home.bin_dir().display(), shell.rc_file());
+        } else {
+            println!("PATH already configured");
         }
     }
 
@@ -94,13 +89,14 @@ pub async fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
     Ok(())
 }
 
+use std::io::{self, BufRead, Write};
+
 fn prompt_remote(preset: Option<&str>) -> Result<Option<String>> {
     if let Some(r) = preset {
         return Ok(Some(r.to_string()));
     }
 
     print!("default remote host (e.g. github.com) — enter to skip: ");
-    use std::io::{self, BufRead, Write};
     io::stdout().flush()?;
 
     let stdin = io::stdin();
