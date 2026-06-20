@@ -14,28 +14,23 @@ pub enum ArchiveKind {
 }
 
 impl ArchiveKind {
-    #[must_use]
     pub fn detect(filename: &str) -> Self {
         let f = filename.to_lowercase();
         if f.ends_with(".tar.gz") || f.ends_with(".tgz") {
-            return Self::TarGz;
+            Self::TarGz
+        } else if f.ends_with(".tar.xz") || f.ends_with(".txz") {
+            Self::TarXz
+        } else if f.ends_with(".zip") {
+            Self::Zip
+        } else if f.ends_with(".appimage") {
+            Self::AppImage
+        } else if f.ends_with(".dmg") {
+            Self::Dmg
+        } else if f.ends_with(".msi") {
+            Self::Msi
+        } else {
+            Self::Raw
         }
-        if f.ends_with(".tar.xz") || f.ends_with(".txz") {
-            return Self::TarXz;
-        }
-        if f.ends_with(".zip") {
-            return Self::Zip;
-        }
-        if f.ends_with(".appimage") {
-            return Self::AppImage;
-        }
-        if f.ends_with(".dmg") {
-            return Self::Dmg;
-        }
-        if f.ends_with(".msi") {
-            return Self::Msi;
-        }
-        Self::Raw
     }
 }
 
@@ -94,10 +89,8 @@ pub fn extract(
 }
 
 /// Extract entire archive to a directory, preserving the full tree.
-/// Returns the path to the extracted directory.
 pub fn extract_dir(bytes: &[u8], asset_name: &str, stage_dir: &Path) -> Result<PathBuf> {
     let out_dir = stage_dir.join("extracted");
-    // Clean up any previous extraction
     let _ = std::fs::remove_dir_all(&out_dir);
     std::fs::create_dir_all(&out_dir)?;
 
@@ -106,7 +99,6 @@ pub fn extract_dir(bytes: &[u8], asset_name: &str, stage_dir: &Path) -> Result<P
         ArchiveKind::TarXz => extract_tar_xz_to_dir(bytes, &out_dir),
         ArchiveKind::Zip => extract_zip_to_dir(bytes, &out_dir),
         ArchiveKind::Raw | ArchiveKind::AppImage => {
-            // Single file "archive" — write to dir as the file itself
             let name = asset_name.rsplit('/').next().unwrap_or("binary");
             let out = out_dir.join(name);
             std::fs::write(&out, bytes)?;
@@ -115,9 +107,7 @@ pub fn extract_dir(bytes: &[u8], asset_name: &str, stage_dir: &Path) -> Result<P
         }
         ArchiveKind::Dmg => {
             #[cfg(target_os = "macos")]
-            {
-                extract_dmg_to_dir(bytes, asset_name, &out_dir)
-            }
+            return extract_dmg_to_dir(bytes, &out_dir);
             #[cfg(not(target_os = "macos"))]
             Err(IkkError::Store(".dmg is only supported on macOS".into()))
         }
@@ -125,30 +115,12 @@ pub fn extract_dir(bytes: &[u8], asset_name: &str, stage_dir: &Path) -> Result<P
     }
 }
 
-/// Count how many executable-looking files are in a directory (recursive).
 pub fn count_binaries(dir: &Path) -> Result<usize> {
     let mut count = 0;
     count_binaries_recursive(dir, &mut count)?;
     Ok(count)
 }
 
-fn count_binaries_recursive(dir: &Path, count: &mut usize) -> Result<()> {
-    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
-        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            count_binaries_recursive(&path, count)?;
-        } else {
-            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if exe_score(filename) > 0 {
-                *count += 1;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// List all executable-looking files in a directory (recursive).
 pub fn list_binaries(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut binaries = vec![];
     list_binaries_recursive(dir, &mut binaries)?;
@@ -173,32 +145,66 @@ impl Drop for CleanupFile {
     }
 }
 
-fn find_best_in_dir(dir: &Path, target: &str, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
-        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            find_best_in_dir(&path, target, best)?;
-        } else {
+/// Search a directory tree for the best binary match:
+/// 1. Score every file against `binary_name` using `name_match_score`.
+/// 2. If the best name-match is a data file (exe_score == 0), fall back to
+///    the most binary-like file via `exe_score`.
+fn pick_best(tmp_dir: &Path, binary_name: &str) -> Result<PathBuf> {
+    let mut best: Option<(PathBuf, u32)> = None;
+    find_in_dir(
+        tmp_dir,
+        &|path| {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let score = name_match_score(filename, target);
-            if score > best.as_ref().map_or(0, |(_, s)| *s) {
-                *best = Some((path, score));
-            }
+            name_match_score(filename, binary_name)
+        },
+        &mut best,
+    )?;
+
+    // If the best name-match is a data file, fall back to exe_score.
+    // Fixes neovim archives where neovim.desktop (name_score=50) beats nvim.
+    let best_is_data = best.as_ref().map_or(true, |(path, _)| {
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        exe_score(filename) == 0
+    });
+    if best_is_data {
+        let mut fallback: Option<(PathBuf, u32)> = None;
+        find_in_dir(
+            tmp_dir,
+            &|path| {
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                exe_score(filename)
+            },
+            &mut fallback,
+        )?;
+        if let Some((path, s)) = fallback
+            && best.as_ref().is_none_or(|(_, bs)| s > *bs)
+        {
+            best = Some((path, s));
         }
     }
-    Ok(())
+
+    let (found_path, _) = best
+        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in archive")))?;
+
+    let out_filename = found_path
+        .file_name()
+        .ok_or_else(|| IkkError::Store("extracted path has no file name".into()))?;
+
+    Ok(found_path.with_file_name(out_filename))
 }
 
-fn find_exe_in_dir(dir: &Path, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
+fn find_in_dir(
+    dir: &Path,
+    score_fn: &dyn Fn(&Path) -> u32,
+    best: &mut Option<(PathBuf, u32)>,
+) -> Result<()> {
     for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
         let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
         let path = entry.path();
         if path.is_dir() {
-            find_exe_in_dir(&path, best)?;
+            find_in_dir(&path, score_fn, best)?;
         } else {
-            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let s = exe_score(filename);
+            let s = score_fn(&path);
             if s > best.as_ref().map_or(0, |(_, b)| *b) {
                 *best = Some((path, s));
             }
@@ -252,34 +258,39 @@ fn extract_tar_xz(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<P
     extract_tar_archive(dec, binary_name, stage_dir)
 }
 
-/// Extract a tar.gz to a directory (full tree, no binary search).
-fn extract_tar_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
-    let cursor = std::io::Cursor::new(bytes);
-    let dec = flate2::read::GzDecoder::new(cursor);
-    let mut archive = tar::Archive::new(dec);
-    archive.unpack(out_dir).map_err(|e| IkkError::Store(e.to_string()))?;
-    set_executable_recursive(out_dir)?;
-    Ok(out_dir.to_path_buf())
+fn extract_tar_archive<R: std::io::Read>(
+    reader: R,
+    binary_name: &str,
+    stage_dir: &Path,
+) -> Result<PathBuf> {
+    let mut archive = tar::Archive::new(reader);
+    let tmp_dir = stage_dir.join("tmp_extract");
+    std::fs::create_dir_all(&tmp_dir)?;
+    let _cleanup = CleanupDir(tmp_dir.clone());
+
+    archive.unpack(&tmp_dir).map_err(|e| IkkError::Store(e.to_string()))?;
+
+    let found = pick_best(&tmp_dir, binary_name)?;
+    let out = stage_dir.join(found.file_name().unwrap());
+    std::fs::rename(&found, &out)?;
+    set_executable(&out);
+    Ok(out)
 }
 
-/// Extract a tar.xz to a directory (full tree).
-fn extract_tar_xz_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
-    let cursor = std::io::Cursor::new(bytes);
-    let dec = xz2::read::XzDecoder::new(cursor);
-    let mut archive = tar::Archive::new(dec);
-    archive.unpack(out_dir).map_err(|e| IkkError::Store(e.to_string()))?;
-    set_executable_recursive(out_dir)?;
-    Ok(out_dir.to_path_buf())
-}
-
-/// Extract a .zip to a directory (full tree).
-fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
+fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<PathBuf> {
     use zip::ZipArchive;
+
     let cursor = std::io::Cursor::new(bytes);
-    let mut archive = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
-        let out_path = out_dir.join(file.name());
+    let mut arc = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
+
+    let tmp_dir = stage_dir.join("tmp_zip");
+    std::fs::create_dir_all(&tmp_dir)?;
+    let _cleanup = CleanupDir(tmp_dir.clone());
+
+    // Extract all files
+    for i in 0..arc.len() {
+        let mut file = arc.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
+        let out_path = safe_join(&tmp_dir, file.name())?;
         if file.is_dir() {
             std::fs::create_dir_all(&out_path)?;
         } else {
@@ -290,17 +301,96 @@ fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
             std::io::copy(&mut file, &mut f)?;
         }
     }
-    set_executable_recursive(out_dir)?;
+
+    let found = pick_best(&tmp_dir, binary_name)?;
+    let out = stage_dir.join(found.file_name().unwrap());
+    std::fs::rename(&found, &out)?;
+    set_executable(&out);
+    Ok(out)
+}
+
+// ── directory extraction (full tree) ─────────────────────────────────────────
+
+fn extract_tar_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
+    let cursor = std::io::Cursor::new(bytes);
+    let dec = flate2::read::GzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(dec);
+    archive.unpack(out_dir).map_err(|e| IkkError::Store(e.to_string()))?;
+    set_executable_recursive(out_dir);
+    Ok(out_dir.to_path_buf())
+}
+
+fn extract_tar_xz_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
+    let cursor = std::io::Cursor::new(bytes);
+    let dec = xz2::read::XzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(dec);
+    archive.unpack(out_dir).map_err(|e| IkkError::Store(e.to_string()))?;
+    set_executable_recursive(out_dir);
+    Ok(out_dir.to_path_buf())
+}
+
+fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
+    use zip::ZipArchive;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
+        let out_path = safe_join(out_dir, file.name())?;
+        if file.is_dir() {
+            std::fs::create_dir_all(&out_path)?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut f = std::fs::File::create(&out_path)?;
+            std::io::copy(&mut file, &mut f)?;
+        }
+    }
+    set_executable_recursive(out_dir);
     Ok(out_dir.to_path_buf())
 }
 
 #[cfg(target_os = "macos")]
-fn extract_dmg_to_dir(bytes: &[u8], _asset_name: &str, out_dir: &Path) -> Result<PathBuf> {
+fn extract_dmg_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
     use std::process::Command;
 
     let dmg_path = out_dir.join("download.dmg");
     std::fs::write(&dmg_path, bytes)?;
     let _cleanup = CleanupFile(dmg_path.clone());
+
+    let mount = attach_dmg(&dmg_path)?;
+    copy_dir_contents(Path::new(&mount), out_dir)?;
+    let _ = Command::new("hdiutil").args(["detach", &mount, "-quiet"]).output();
+    set_executable_recursive(out_dir);
+    Ok(out_dir.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<PathBuf> {
+    use std::process::Command;
+
+    let dmg_path = stage_dir.join("download.dmg");
+    std::fs::write(&dmg_path, bytes)?;
+    let _cleanup = CleanupFile(dmg_path.clone());
+
+    let mount = attach_dmg(&dmg_path)?;
+    let found = find_binary_in_dir(Path::new(&mount), binary_name)
+        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in dmg")))?;
+
+    let dst = stage_dir.join(binary_name);
+    std::fs::copy(&found, &dst)?;
+
+    let _ = Command::new("hdiutil").args(["detach", &mount, "-quiet"]).output();
+    let _ =
+        Command::new("xattr").args(["-dr", "com.apple.quarantine", dst.to_str().unwrap()]).output();
+
+    set_executable(&dst);
+    Ok(dst)
+}
+
+#[cfg(target_os = "macos")]
+fn attach_dmg(dmg_path: &Path) -> Result<String> {
+    use std::process::Command;
 
     let out = Command::new("hdiutil")
         .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
@@ -311,21 +401,14 @@ fn extract_dmg_to_dir(bytes: &[u8], _asset_name: &str, out_dir: &Path) -> Result
         return Err(IkkError::Store(format!("hdiutil attach failed: {stderr}")));
     }
 
+    // Parse mount point from the /Volumes/ line (not fragile last-line approach)
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let mount = stdout
+    stdout
         .lines()
-        .last()
+        .find(|l| l.contains("/Volumes/"))
         .and_then(|l| l.split_whitespace().last())
-        .ok_or_else(|| IkkError::Store("could not determine dmg mount point".into()))?
-        .to_string();
-
-    // Copy all files from mount to out_dir
-    copy_dir_contents(Path::new(&mount), out_dir)?;
-
-    let _ = Command::new("hdiutil").args(["detach", &mount, "-quiet"]).output();
-
-    set_executable_recursive(out_dir)?;
-    Ok(out_dir.to_path_buf())
+        .map(String::from)
+        .ok_or_else(|| IkkError::Store("could not determine dmg mount point".into()))
 }
 
 #[cfg(target_os = "macos")]
@@ -344,179 +427,27 @@ fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn set_executable_recursive(dir: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
-        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            set_executable_recursive(&path)?;
-        } else {
-            let () = set_executable(&path);
+// ── zip path safety ──────────────────────────────────────────────────────────
+
+/// Join a base directory with a zip entry path, rejecting `..` traversal.
+fn safe_join(base: &Path, entry_path: &str) -> Result<PathBuf> {
+    // Normalize: strip leading slashes, resolve .. components
+    let path = Path::new(entry_path);
+    let path = if path.is_absolute() { path.strip_prefix("/").unwrap_or(path) } else { path };
+
+    // Reject any component that is ".."
+    for component in path.components() {
+        if component == std::path::Component::ParentDir {
+            return Err(IkkError::Store(format!(
+                "rejected path traversal in zip entry: {entry_path}"
+            )));
         }
     }
-    Ok(())
+
+    Ok(base.join(path))
 }
 
-fn extract_tar_archive<R: std::io::Read>(
-    reader: R,
-    binary_name: &str,
-    stage_dir: &Path,
-) -> Result<PathBuf> {
-    let mut archive = tar::Archive::new(reader);
-    let tmp_dir = stage_dir.join("tmp_extract");
-    std::fs::create_dir_all(&tmp_dir)?;
-    let _cleanup = CleanupDir(tmp_dir.clone());
-
-    archive.unpack(&tmp_dir).map_err(|e| IkkError::Store(e.to_string()))?;
-
-    let mut best: Option<(PathBuf, u32)> = None;
-    find_best_in_dir(&tmp_dir, binary_name, &mut best)?;
-
-    // If the best name-match is a data file (not a binary), fall back to the
-    // most binary-like file in the archive. Fixes neovim archives where
-    // neovim.desktop (name_score=50) beats nvim (name_score=10).
-    let best_is_data = match &best {
-        Some((path, _)) => {
-            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            exe_score(filename) == 0
-        }
-        None => true,
-    };
-    if best_is_data {
-        let mut fallback: Option<(PathBuf, u32)> = None;
-        find_exe_in_dir(&tmp_dir, &mut fallback)?;
-        if let Some((path, s)) = fallback
-            && best.as_ref().is_none_or(|(_, bs)| s > *bs)
-        {
-            best = Some((path, s));
-        }
-    }
-
-    if let Some((found_path, _)) = best {
-        let out = stage_dir.join(found_path.file_name().unwrap());
-        std::fs::rename(found_path, &out)?;
-        set_executable(&out);
-        Ok(out)
-    } else {
-        Err(IkkError::Store(format!("binary '{binary_name}' not found in archive")))
-    }
-}
-
-fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<PathBuf> {
-    use zip::ZipArchive;
-
-    let cursor = std::io::Cursor::new(bytes);
-    let mut arc = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
-
-    let tmp_dir = stage_dir.join("tmp_zip");
-    std::fs::create_dir_all(&tmp_dir)?;
-    let _cleanup = CleanupDir(tmp_dir.clone());
-
-    let mut best: Option<(PathBuf, u32)> = None;
-
-    for i in 0..arc.len() {
-        let mut file = arc.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
-        let filename = file.name().split('/').next_back().unwrap_or("");
-        let score = name_match_score(filename, binary_name);
-
-        let out_path = tmp_dir.join(file.name());
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        if file.is_file() {
-            let mut f = std::fs::File::create(&out_path)?;
-            std::io::copy(&mut file, &mut f)?;
-
-            if score > best.as_ref().map_or(0, |(_, s)| *s) {
-                best = Some((out_path, score));
-            }
-        }
-    }
-
-    // If the best name-match is a data file, fall back to binary detection
-    let best_is_data = match &best {
-        Some((path, _)) => {
-            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            exe_score(filename) == 0
-        }
-        None => true,
-    };
-    if best_is_data {
-        let mut fallback: Option<(PathBuf, u32)> = None;
-        find_exe_in_dir(&tmp_dir, &mut fallback)?;
-        if let Some((path, s)) = fallback
-            && best.as_ref().is_none_or(|(_, bs)| s > *bs)
-        {
-            best = Some((path, s));
-        }
-    }
-
-    if let Some((found_path, _)) = best {
-        let out = stage_dir.join(found_path.file_name().unwrap());
-        std::fs::rename(found_path, &out)?;
-        set_executable(&out);
-        Ok(out)
-    } else {
-        Err(IkkError::Store(format!("binary '{binary_name}' not found in zip")))
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<PathBuf> {
-    use std::process::Command;
-
-    let dmg_path = stage_dir.join("download.dmg");
-    std::fs::write(&dmg_path, bytes)?;
-    let _cleanup = CleanupFile(dmg_path.clone());
-
-    let out = Command::new("hdiutil")
-        .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
-        .output()?;
-
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(IkkError::Store(format!("hdiutil attach failed: {stderr}")));
-    }
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let mount = stdout
-        .lines()
-        .last()
-        .and_then(|l| l.split_whitespace().last())
-        .ok_or_else(|| IkkError::Store("could not determine dmg mount point".into()))?
-        .to_string();
-
-    let found = find_binary_in_dir(Path::new(&mount), binary_name);
-
-    let detach = Command::new("hdiutil").args(["detach", &mount, "-quiet"]).output();
-
-    match detach {
-        Ok(o) if !o.status.success() => {
-            tracing::warn!(
-                "hdiutil detach {} failed: {}",
-                mount,
-                String::from_utf8_lossy(&o.stderr)
-            );
-        }
-        Err(e) => {
-            tracing::warn!("hdiutil detach {} failed: {e}", mount);
-        }
-        _ => {}
-    }
-
-    let src =
-        found.ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in dmg")))?;
-
-    let dst = stage_dir.join(binary_name);
-    std::fs::copy(&src, &dst)?;
-
-    let _ =
-        Command::new("xattr").args(["-dr", "com.apple.quarantine", dst.to_str().unwrap()]).output();
-
-    set_executable(&dst);
-    Ok(dst)
-}
+// ── scoring ──────────────────────────────────────────────────────────────────
 
 fn name_match_score(filename: &str, binary_name: &str) -> u32 {
     if filename.is_empty() {
@@ -536,11 +467,15 @@ fn name_match_score(filename: &str, binary_name: &str) -> u32 {
     0
 }
 
-/// Score how likely a file is to be a binary (not data). Higher = more binary-like.
-#[must_use]
+/// Score how likely a file is to be an executable binary (not data / library).
+///
+/// Data files (`.txt`, `.json`, etc.) and shared libraries (`.so`, `.dylib`,
+/// `.dll`) return 0. Files with no extension get 80, `.exe` gets 90.
+///
+/// Note: a package that ships *only* shared libraries (no executable) will
+/// yield zero matches. That's intentional — ikk manages CLI tools, not libraries.
 pub fn exe_score(filename: &str) -> u32 {
     let f = filename.to_lowercase();
-    // data files and shared libraries — reject
     for ext in [
         "ico", "png", "jpg", "svg", "txt", "md", "json", "toml", "yaml", "yml", "xml", "html",
         "css", "js", "ts", "so", "dylib", "dll", "a", "lib",
@@ -549,15 +484,26 @@ pub fn exe_score(filename: &str) -> u32 {
             return 0;
         }
     }
-    // common binary extensions
     if f.ends_with(".exe") {
         return 90;
     }
-    // file with no extension is likely a binary
     if !f.contains('.') {
         return 80;
     }
     50
+}
+
+// ── permission helpers ───────────────────────────────────────────────────────
+
+fn set_executable_recursive(dir: &Path) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().filter_map(std::result::Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            set_executable_recursive(&path);
+        } else {
+            set_executable(&path);
+        }
+    }
 }
 
 #[cfg_attr(unix, expect(clippy::used_underscore_binding))]
@@ -565,15 +511,32 @@ fn set_executable(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
+        if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755)) {
+            tracing::warn!("failed to set executable permissions on {}: {e}", _path.display());
+        }
     }
+}
+
+fn count_binaries_recursive(dir: &Path, count: &mut usize) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            count_binaries_recursive(&path, count)?;
+        } else {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if exe_score(filename) > 0 {
+                *count += 1;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Create a tar.gz in memory with the given files.
     fn tar_gz_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut ar = tar::Builder::new(Vec::new());
         for (name, data) in files {
@@ -590,12 +553,17 @@ mod tests {
         gz.finish().unwrap()
     }
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ikk_test_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn extracts_exact_name_match() {
         let bytes = tar_gz_with_files(&[("rg", b"binary")]);
-        let dir = std::env::temp_dir().join("ikk_test_exact");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("exact");
 
         let result = extract(&bytes, "ripgrep.tar.gz", "rg", &dir);
         assert!(result.is_ok());
@@ -607,12 +575,9 @@ mod tests {
 
     #[test]
     fn auto_detects_when_name_differs() {
-        // neovim archive contains nvim, user didn't specify --binary
         let bytes =
             tar_gz_with_files(&[("share/nvim/runtime/file", b"data"), ("bin/nvim", b"binary")]);
-        let dir = std::env::temp_dir().join("ikk_test_autodetect");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("autodetect");
 
         let result = extract(&bytes, "nvim-linux.tar.gz", "neovim", &dir);
         assert!(result.is_ok(), "should auto-detect nvim: {:?}", result.err());
@@ -624,11 +589,8 @@ mod tests {
 
     #[test]
     fn rejects_data_files_for_binary() {
-        // nvim archive has an .ico file — should NOT pick it over the binary
         let bytes = tar_gz_with_files(&[("nvim-icon.ico", b"icon"), ("bin/nvim", b"binary")]);
-        let dir = std::env::temp_dir().join("ikk_test_no_icon");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("no_icon");
 
         let result = extract(&bytes, "nvim-linux.tar.gz", "nvim", &dir);
         assert!(result.is_ok());
@@ -636,5 +598,14 @@ mod tests {
         assert_eq!(path.file_name().unwrap(), "nvim");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zip_safe_join_blocks_traversal() {
+        let base = Path::new("/tmp/out");
+        assert!(safe_join(base, "../../etc/passwd").is_err());
+        assert!(safe_join(base, "foo/../../../bar").is_err());
+        assert!(safe_join(base, "normal/file.txt").is_ok());
+        assert!(safe_join(base, "./ok.txt").is_ok());
     }
 }
