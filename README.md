@@ -140,6 +140,6 @@ ikk sync
 - **Declared state** — `ikk.toml` describes what you want, `ikk sync` makes it real. Idempotent.
 - **One version per package** — no shims, no version switching.
 - **Forge-agnostic** — GitHub, GitLab, Codeberg, Gitea: all config in `remotes.toml`, zero code.
-- **Content-addressed store** — binary hashed before storing, merkle root over lock file, `ikk check` re-verifies.
+- **Content-addressed store** — binary hashed before storing, integrity digest over lock file, `ikk check` re-verifies.
 - **Multi-binary packages** — directory packages with `ikk run` for tools like llama.cpp.
 - **No sudo** — everything in `~/.ikk`.
