@@ -154,6 +154,75 @@ pub fn list_binaries(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(binaries)
 }
 
+// ── shared helpers ───────────────────────────────────────────────────────────
+
+struct CleanupDir(PathBuf);
+impl Drop for CleanupDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct CleanupFile(PathBuf);
+#[cfg(target_os = "macos")]
+impl Drop for CleanupFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn find_best_in_dir(dir: &Path, target: &str, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            find_best_in_dir(&path, target, best)?;
+        } else {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let score = name_match_score(filename, target);
+            if score > best.as_ref().map_or(0, |(_, s)| *s) {
+                *best = Some((path, score));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn find_exe_in_dir(dir: &Path, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
+        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            find_exe_in_dir(&path, best)?;
+        } else {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let s = exe_score(filename);
+            if s > best.as_ref().map_or(0, |(_, b)| *b) {
+                *best = Some((path, s));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn find_binary_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
+    for e in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
+        let p = e.path();
+        if p.is_dir() {
+            if let Some(found) = find_binary_in_dir(&p, name) {
+                return Some(found);
+            }
+        } else if p.file_name().and_then(|n| n.to_str()) == Some(name) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+// ── single-file extraction ──────────────────────────────────────────────────
+
 fn list_binaries_recursive(dir: &Path, binaries: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
         let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
@@ -230,14 +299,7 @@ fn extract_dmg_to_dir(bytes: &[u8], _asset_name: &str, out_dir: &Path) -> Result
 
     let dmg_path = out_dir.join("download.dmg");
     std::fs::write(&dmg_path, bytes)?;
-
-    struct Cleanup(PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-    let _cleanup = Cleanup(dmg_path.clone());
+    let _cleanup = CleanupFile(dmg_path.clone());
 
     let out = Command::new("hdiutil")
         .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
@@ -300,44 +362,13 @@ fn extract_tar_archive<R: std::io::Read>(
     stage_dir: &Path,
 ) -> Result<PathBuf> {
     let mut archive = tar::Archive::new(reader);
-
-    // Create a temporary directory for unpacking to avoid "greedy matching" issues
     let tmp_dir = stage_dir.join("tmp_extract");
     std::fs::create_dir_all(&tmp_dir)?;
-
-    // Ensure tmp_dir is cleaned up
-    struct Cleanup(PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let _cleanup = Cleanup(tmp_dir.clone());
+    let _cleanup = CleanupDir(tmp_dir.clone());
 
     archive.unpack(&tmp_dir).map_err(|e| IkkError::Store(e.to_string()))?;
 
-    // Now search for the best match in the unpacked directory
     let mut best: Option<(PathBuf, u32)> = None;
-
-    // We use a recursive search to find the binary
-    fn find_best_in_dir(dir: &Path, target: &str, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
-        for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
-            let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                find_best_in_dir(&path, target, best)?;
-            } else {
-                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                let score = name_match_score(filename, target);
-                if score > best.as_ref().map_or(0, |(_, s)| *s) {
-                    *best = Some((path, score));
-                }
-            }
-        }
-        Ok(())
-    }
-
     find_best_in_dir(&tmp_dir, binary_name, &mut best)?;
 
     // If the best name-match is a data file (not a binary), fall back to the
@@ -378,14 +409,7 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
 
     let tmp_dir = stage_dir.join("tmp_zip");
     std::fs::create_dir_all(&tmp_dir)?;
-
-    struct Cleanup(PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let _cleanup = Cleanup(tmp_dir.clone());
+    let _cleanup = CleanupDir(tmp_dir.clone());
 
     let mut best: Option<(PathBuf, u32)> = None;
 
@@ -443,15 +467,7 @@ fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
 
     let dmg_path = stage_dir.join("download.dmg");
     std::fs::write(&dmg_path, bytes)?;
-
-    // ensure dmg is removed on all exit paths
-    struct Cleanup(PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-    let _cleanup = Cleanup(dmg_path.clone());
+    let _cleanup = CleanupFile(dmg_path.clone());
 
     let out = Command::new("hdiutil")
         .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
@@ -501,21 +517,6 @@ fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
     Ok(dst)
 }
 
-#[cfg(target_os = "macos")]
-fn find_binary_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
-    for e in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
-        let p = e.path();
-        if p.is_dir() {
-            if let Some(found) = find_binary_in_dir(&p, name) {
-                return Some(found);
-            }
-        } else if p.file_name().and_then(|n| n.to_str()) == Some(name) {
-            return Some(p);
-        }
-    }
-    None
-}
-
 fn name_match_score(filename: &str, binary_name: &str) -> u32 {
     if filename.is_empty() {
         return 0;
@@ -555,24 +556,6 @@ pub fn exe_score(filename: &str) -> u32 {
         return 80;
     }
     50
-}
-
-/// Recursive search for the most binary-like file.
-fn find_exe_in_dir(dir: &Path, best: &mut Option<(PathBuf, u32)>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
-        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            find_exe_in_dir(&path, best)?;
-        } else {
-            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let s = exe_score(filename);
-            if s > best.as_ref().map_or(0, |(_, b)| *b) {
-                *best = Some((path, s));
-            }
-        }
-    }
-    Ok(())
 }
 
 fn set_executable(_path: &Path) -> Result<()> {

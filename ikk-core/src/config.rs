@@ -119,12 +119,12 @@ pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    let days = days_from_civil(year, month, day)?;
+    let days = days_from_civil(year, month, day);
     let now_days = days_from_civil_utc_now()?;
     Some(now_days.saturating_sub(days))
 }
 
-fn days_from_civil(mut y: i64, m: u32, d: u32) -> Option<u64> {
+fn days_from_civil(mut y: i64, m: u32, d: u32) -> u64 {
     let mut m = m as i64;
     if m <= 2 {
         y -= 1;
@@ -135,7 +135,7 @@ fn days_from_civil(mut y: i64, m: u32, d: u32) -> Option<u64> {
     let yoe = (y - era * 400) as u64;
     let doy = (153 * (m as u64 - 3) + 2) / 5 + d as u64 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era as u64 * 146097 + doe - 719468)
+    era as u64 * 146097 + doe - 719468
 }
 
 fn days_from_civil_utc_now() -> Option<u64> {
