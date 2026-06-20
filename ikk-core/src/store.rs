@@ -388,28 +388,31 @@ fn set_executable_recursive(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn seal(path: &Path) {
+#[expect(clippy::used_underscore_binding)]
+fn seal(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         // chmod may fail on WSL2 drvfs — non-fatal
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555));
+        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555));
     }
 }
 
-fn unseal(path: &Path) {
+#[expect(clippy::used_underscore_binding)]
+fn unseal(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
     }
 }
 
-fn unseal_dir(path: &Path) {
+#[expect(clippy::used_underscore_binding)]
+fn unseal_dir(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
     }
 }
 
