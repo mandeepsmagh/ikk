@@ -42,7 +42,7 @@ async fn pinned_with_binary() {
         sha256: None,
     };
 
-    let registry = ConfigRegistry::new(vec![]);
+    let registry = ConfigRegistry::new(vec![], reqwest::Client::new());
     let http = reqwest::Client::new();
     let security = SecurityConfig::default();
 
@@ -84,7 +84,7 @@ async fn latest_with_auto_detect() {
         sha256: None,
     };
 
-    let registry = ConfigRegistry::new(vec![]);
+    let registry = ConfigRegistry::new(vec![], reqwest::Client::new());
     let http = reqwest::Client::new();
     let security = SecurityConfig::default();
 

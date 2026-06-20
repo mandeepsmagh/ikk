@@ -39,6 +39,12 @@ pub enum IkkError {
     #[error("latest release is a prerelease or draft — pin a specific version")]
     PrereleaseNotAllowed,
 
+    #[error("unexpected API response from {host}: {message}")]
+    RemoteProtocolError { host: String, message: String },
+
+    #[error("no stable release found on {0}")]
+    NoStableRelease(String),
+
     // ── structured build errors ──────────────────────────────────────────────
     #[error("build step `{command}` exited with code {exit_code} (package `{name}`)")]
     BuildStepFailed { name: String, command: String, exit_code: i32 },

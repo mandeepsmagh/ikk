@@ -36,13 +36,14 @@ impl Ctx {
         let store_path = config.store.path.clone().unwrap_or_else(|| home.store_dir());
         let store = Store::open(store_path)?;
         let platform = Platform::current();
-        let registry = ConfigRegistry::new(config.remotes.clone());
 
         let http = reqwest::Client::builder()
             .user_agent(format!("ikk/{}", env!("CARGO_PKG_VERSION")))
             .connect_timeout(std::time::Duration::from_secs(30))
             .timeout(std::time::Duration::from_secs(300))
             .build()?;
+
+        let registry = ConfigRegistry::new(config.remotes.clone(), http.clone());
 
         Ok(Self { home: home.clone(), config, lock, store, platform, registry, http })
     }

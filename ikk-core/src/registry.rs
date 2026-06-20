@@ -16,21 +16,21 @@ struct RemotesFile {
 
 pub struct ConfigRegistry {
     remotes: Vec<RemoteConfig>,
+    http: reqwest::Client,
 }
 
 impl ConfigRegistry {
-    /// Build from user-supplied extra remotes.
+    /// Build from user-supplied extra remotes and a shared HTTP client.
     /// Built-in defaults are always loaded first;
     /// user entries appended — later entries win on same host.
     /// Logs a warning if the same host appears multiple times in the user config.
     #[must_use]
-    pub fn new(user_remotes: Vec<RemoteConfig>) -> Self {
+    pub fn new(user_remotes: Vec<RemoteConfig>, http: reqwest::Client) -> Self {
         let defaults: RemotesFile = toml::from_str(DEFAULT_REMOTES)
             .expect("built-in remotes.toml is invalid — this is a bug");
 
         let mut remotes = defaults.remotes;
 
-        // Detect duplicate hosts in user config before merging
         let mut seen = std::collections::HashSet::new();
         for r in &user_remotes {
             if !seen.insert(&r.host) {
@@ -42,11 +42,10 @@ impl ConfigRegistry {
         }
 
         remotes.extend(user_remotes);
-        Self { remotes }
+        Self { remotes, http }
     }
 
     fn find(&self, host: &str) -> Option<&RemoteConfig> {
-        // search in reverse — user overrides win
         self.remotes.iter().rev().find(|r| r.host == host)
     }
 }
@@ -57,17 +56,16 @@ impl RemoteRegistry for ConfigRegistry {
             .host_str()
             .ok_or_else(|| IkkError::MalformedUri(format!("URL has no host: {url}")))?;
 
-        let config =
-            self.find(host).ok_or_else(|| IkkError::UnknownRemote(host.to_string()))?.clone();
+        let config = self
+            .find(host)
+            .ok_or_else(|| IkkError::UnknownRemote(host.to_string()))?
+            .clone();
 
         let (owner, repo) = owner_repo_from_url(url).ok_or_else(|| {
             IkkError::MalformedUri(format!("cannot extract owner/repo from URL: {url}"))
         })?;
 
-        // Note: ConfiguredRemote::new() creates its own reqwest Client internally.
-        // This means each remote gets a dedicated client. A future optimization
-        // could accept a shared client from the CLI context.
-        Ok(Box::new(ConfiguredRemote::new(config, owner, repo)))
+        Ok(Box::new(ConfiguredRemote::new(config, owner, repo, self.http.clone())))
     }
 }
 
