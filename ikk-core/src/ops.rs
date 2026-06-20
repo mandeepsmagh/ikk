@@ -107,7 +107,7 @@ pub async fn install_template(
     // Use directory detection same as forge path
     let fetched =
         process_downloaded_bytes(binary_name, &bytes, &download_url, &req.home.stage_dir())?;
-    commit(name, version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir());
+    commit(name, version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir())?;
 
     tracing::info!("installed {}@{}", name, version);
     Ok(())
@@ -236,6 +236,7 @@ fn process_downloaded_bytes(
     })
 }
 
+#[expect(clippy::too_many_arguments)]
 fn commit(
     name: &str,
     version: &str,

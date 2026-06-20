@@ -162,7 +162,7 @@ fn pick_best(tmp_dir: &Path, binary_name: &str) -> Result<PathBuf> {
 
     // If the best name-match is a data file, fall back to exe_score.
     // Fixes neovim archives where neovim.desktop (name_score=50) beats nvim.
-    let best_is_data = best.as_ref().map_or(true, |(path, _)| {
+    let best_is_data = best.as_ref().is_none_or(|(path, _)| {
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         exe_score(filename) == 0
     });

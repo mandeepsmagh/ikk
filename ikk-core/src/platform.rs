@@ -102,7 +102,7 @@ pub fn score_asset(name: &str, platform: &Platform) -> Option<u32> {
 
     // Token-based matching: split on common separators to avoid false positives
     // like "darwintools" matching "darwin".
-    let tokens: Vec<&str> = name.split(|c: char| c == '-' || c == '_' || c == '.').collect();
+    let tokens: Vec<&str> = name.split(['-', '_', '.']).collect();
 
     let contains = |variant: &str| -> bool { tokens.iter().any(|t| *t == variant.to_lowercase()) };
 

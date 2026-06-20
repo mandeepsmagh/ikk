@@ -202,7 +202,6 @@ pub enum PackageMode {
 
 impl PackageMode {
     /// Classify a URI (raw, before shorthand expansion) and optional build field.
-    #[must_use]
     pub fn classify(uri: &str, default_remote: Option<&str>, has_build: bool) -> Result<Self> {
         // Shorthand — no scheme, no leading / or ~/
         if !uri.contains("://") && !uri.starts_with('/') && !uri.starts_with("~/") {
@@ -249,6 +248,7 @@ impl Config {
     /// Load from disk via two-pass deserialization:
     /// 1. Parse into `toml::Table` to partition known sections from package entries
     /// 2. Deserialize each section individually for clear error messages.
+    ///
     /// Returns defaults if file does not exist.
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
