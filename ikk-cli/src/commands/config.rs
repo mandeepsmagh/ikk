@@ -10,21 +10,21 @@ pub struct ConfigArgs {
 
 #[derive(Subcommand)]
 pub enum ConfigAction {
-    /// Get a config value (e.g. 'ikk config get defaults.remote')
+    /// Get a config value
     Get(GetArgs),
-    /// Set a config value (e.g. 'ikk config set defaults.remote github.com')
+    /// Set a config value
     Set(SetArgs),
 }
 
 #[derive(Args)]
 pub struct GetArgs {
-    /// Config key in dot notation (e.g. defaults.remote, security.min_release_age_days)
+    /// Config key (e.g. defaults.remote, security.min_release_age_days)
     pub key: String,
 }
 
 #[derive(Args)]
 pub struct SetArgs {
-    /// Config key in dot notation
+    /// Config key
     pub key: String,
     /// Value to set
     pub value: String,
@@ -43,17 +43,13 @@ fn run_get(args: GetArgs, home: &IkkHome) -> Result<()> {
 
     match args.key.as_str() {
         "defaults.remote" => {
-            let val = config.defaults.remote.as_deref().unwrap_or("(not set)");
-            println!("{val}");
+            println!("{}", config.defaults.remote.as_deref().unwrap_or("(not set)"));
         }
         "security.min_release_age_days" => {
             println!("{}", config.security.min_release_age_days);
         }
         _ => {
-            bail!(
-                "unknown config key '{}' — try defaults.remote or security.min_release_age_days",
-                args.key
-            );
+            bail!("unknown config key '{}'", args.key);
         }
     }
 
@@ -71,14 +67,11 @@ fn run_set(args: SetArgs, home: &IkkHome) -> Result<()> {
             let days: u64 = args
                 .value
                 .parse()
-                .map_err(|_| anyhow::anyhow!("value must be a number (e.g. 3)"))?;
+                .map_err(|_| anyhow::anyhow!("value must be a number"))?;
             config.security.min_release_age_days = days;
         }
         _ => {
-            bail!(
-                "unknown config key '{}' — try defaults.remote or security.min_release_age_days",
-                args.key
-            );
+            bail!("unknown config key '{}'", args.key);
         }
     }
 

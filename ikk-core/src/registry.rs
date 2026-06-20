@@ -46,7 +46,7 @@ impl RemoteRegistry for ConfigRegistry {
             self.find(host).ok_or_else(|| IkkError::UnknownRemote(host.to_string()))?.clone();
 
         let (owner, repo) =
-            owner_repo_from_url(url).ok_or_else(|| IkkError::AmbiguousSource(url.to_string()))?;
+            owner_repo_from_url(url).ok_or_else(|| IkkError::MalformedUri(format!("cannot extract owner/repo from {url}")))?;
 
         Ok(Box::new(ConfiguredRemote::new(config, owner, repo)))
     }

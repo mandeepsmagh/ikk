@@ -1,133 +1,189 @@
 use std::path::Path;
 
 use crate::{
-    config::{Config, PackageConfig},
+    config::{Config, PackageConfig, SecurityConfig},
     error::{IkkError, Result},
     home::IkkHome,
-    lock::{LockFile, LockedPackage},
+    lock::{LockFile, LockedPackage, unix_now},
     platform::Platform,
-    source::{LocalSource, RemoteSource, Source},
+    remote::Remote,
     store::{Store, sha256_hex},
 };
 
-// ── install ───────────────────────────────────────────────────────────────────
+// ── install request ───────────────────────────────────────────────────────────
 
 pub struct InstallRequest<'a> {
+    /// Package name (e.g. "ripgrep").
     pub name: &'a str,
+    /// Package config from ikk.toml.
     pub pkg: &'a PackageConfig,
+    /// Top-level config.
     pub config: &'a Config,
+    /// Current platform.
     pub platform: &'a Platform,
+    /// ikk home directories.
     pub home: &'a IkkHome,
 }
 
+// ── main install path ────────────────────────────────────────────────────────
+
+/// Install a single package end-to-end.
 pub async fn install(
     req: &InstallRequest<'_>,
-    source: &dyn Source,
+    remote: &dyn Remote,
+    http: &reqwest::Client,
+    security: &SecurityConfig,
     store: &Store,
     lock: &mut LockFile,
 ) -> Result<()> {
-    let url = req.config.resolve_source(&req.pkg.source)?;
-    let version = source.version(&req.pkg.version, req.name).await?;
-    let binary_name = req.pkg.binary.as_deref().unwrap_or(req.name);
+    let name = req.name;
+    let pkg = req.pkg;
+    let binary_name = pkg.binary.as_deref().unwrap_or(name);
 
-    // already at this version — nothing to do
-    if let Some(locked) = lock.get(req.name)
-        && locked.version == version
-    {
-        tracing::debug!("{} already at {version}", req.name);
-        return Ok(());
+    // Resolve version
+    let version = resolve_version(name, pkg, remote, security).await?;
+
+    // Already installed at this version?
+    if let Some(locked) = lock.get(name) {
+        if locked.version == version && locked.variant == pkg.variant {
+            tracing::debug!("{name} already at {version}");
+            return Ok(());
+        }
     }
 
-    let fetched = source
-        .fetch(
-            &version,
-            binary_name,
-            req.platform,
-            req.pkg.binary.as_deref(),
-            &req.home.stage_dir(),
-        )
-        .await?;
+    // Fetch binary
+    let (binary_bytes, archive_hash, source_url, is_dir) =
+        fetch_forge(name, &version, binary_name, pkg, req.platform, http, remote, &req.home.stage_dir()).await?;
 
-    commit(
-        req.name,
-        &version,
-        binary_name,
-        url.as_ref(),
-        &fetched,
-        &req.home.bin_dir(),
-        store,
-        lock,
-    )?;
+    // Commit to store + link + lock
+    commit(name, &version, binary_name, pkg, source_url, archive_hash, binary_bytes, is_dir, store, lock, &req.home.bin_dir())?;
 
-    tracing::info!("installed {}@{}", req.name, version);
+    tracing::info!("installed {}@{}", name, version);
     Ok(())
 }
 
-/// Build the appropriate Source for a given package.
-pub fn make_source(
+// ── version resolution ───────────────────────────────────────────────────────
+
+async fn resolve_version(
+    name: &str,
     pkg: &PackageConfig,
-    config: &Config,
-    registry: &dyn crate::remote::RemoteRegistry,
-    http: &reqwest::Client,
-    security: &crate::config::SecurityConfig,
-) -> Result<Box<dyn Source>> {
-    let url = config.resolve_source(&pkg.source)?;
-    if url.scheme() == "file" {
-        let path =
-            url.to_file_path().map_err(|_| IkkError::LocalPathNotFound(pkg.source.clone()))?;
-        let is_dir = path.is_dir();
-        Ok(Box::new(LocalSource::new(path, is_dir, pkg.build.clone())))
-    } else {
-        let remote = registry.remote_for(&url)?;
-        Ok(Box::new(RemoteSource::new(
-            remote,
-            std::sync::Arc::new(http.clone()),
-            security.clone(),
-            pkg.min_release_age_days,
-        )))
+    remote: &dyn Remote,
+    security: &SecurityConfig,
+) -> Result<String> {
+    // Explicit version pinned
+    if let Some(v) = &pkg.version {
+        if v != "latest" {
+            return Ok(v.clone());
+        }
     }
+
+    // Resolve "latest" via forge API
+    let release = remote.latest().await?;
+
+    if release.prerelease || release.draft {
+        return Err(IkkError::Store(
+            "latest release is a prerelease or draft — pin a specific version".into(),
+        ));
+    }
+
+    if !security.is_old_enough(release.published_at.as_deref()) {
+        let age_days = release
+            .published_at
+            .as_deref()
+            .and_then(crate::config::days_since_iso8601)
+            .unwrap_or(0);
+        return Err(IkkError::ReleaseTooRecent {
+            name: name.to_string(),
+            version: release.version.clone(),
+            age_days,
+            min_days: security.min_release_age_days,
+        });
+    }
+
+    Ok(release.version)
 }
 
-/// Shared tail: store insert → symlink → lock update.
-/// Called by both `install()` and `sync()`'s phase 3.
-#[allow(clippy::too_many_arguments)]
+// ── forge fetch ──────────────────────────────────────────────────────────────
+
+async fn fetch_forge(
+    name: &str,
+    version: &str,
+    binary_name: &str,
+    pkg: &PackageConfig,
+    platform: &Platform,
+    http: &reqwest::Client,
+    remote: &dyn Remote,
+    stage_dir: &Path,
+) -> Result<(Vec<u8>, String, String, bool)> {
+    let assets = remote.assets(version).await?;
+    let asset = crate::extract::best_asset(&assets, platform, pkg.binary.as_deref())?;
+
+    tracing::info!("downloading {}…", asset.name);
+    let bytes = http.get(&asset.url).send().await?.bytes().await?;
+    let bytes = bytes.as_ref();
+
+    // SHA-256 verification if user pinned a hash
+    let archive_hash = sha256_hex(bytes);
+    if let Some(expected) = &pkg.sha256 {
+        if archive_hash != *expected {
+            return Err(IkkError::HashMismatch {
+                name: name.to_string(),
+                version: version.to_string(),
+                expected: expected.clone(),
+                actual: archive_hash,
+            });
+        }
+    }
+
+    // Extract — for now, single binary only (is_dir = false).
+    // Stage 4 adds directory package support.
+    let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
+    let binary_bytes = std::fs::read(&binary_path)?;
+
+    // Clean up extracted file
+    let _ = std::fs::remove_file(&binary_path);
+
+    Ok((binary_bytes, archive_hash, asset.url.clone(), false))
+}
+
+// ── commit: store → link → lock ──────────────────────────────────────────────
+
 fn commit(
     name: &str,
     version: &str,
     binary_name: &str,
-    source_url: &str,
-    fetched: &crate::source::FetchedBinary,
-    home_bin: &Path,
+    pkg: &PackageConfig,
+    source_url: String,
+    archive_hash: String,
+    binary_bytes: Vec<u8>,
+    is_dir: bool,
     store: &Store,
     lock: &mut LockFile,
+    bin_dir: &Path,
 ) -> Result<()> {
-    let binary_hash = sha256_hex(&fetched.binary_bytes);
-
-    // remove old version from store if upgrading
+    // Remove old version if upgrading
     if let Some(old) = lock.get(name) {
-        let _ = store.remove(name, &old.version, &old.store_hash);
-        remove_bin_link(&home_bin.join(binary_name))?;
+        let _ = store.remove(name, &old.version, &old.bin_entry);
+        remove_bin_link(bin_dir, name)?;
     }
 
-    let store_path = store.insert(
-        name,
-        version,
-        &fetched.binary_bytes,
-        &fetched.source_url,
-        &fetched.archive_hash,
-    )?;
+    // Store
+    let store_path = store.insert(name, version, pkg.variant.as_deref(), &binary_bytes, &source_url, &archive_hash)?;
 
-    create_bin_link(&store_path.binary, &home_bin.join(binary_name))?;
+    // Link: bin/{name} → store/{hash12}-{name}-{version}[-{variant}]/bin/{name}
+    create_bin_link(&store_path.binary, &bin_dir.join(binary_name))?;
 
+    // Lock
     lock.insert(
         name.to_string(),
         LockedPackage {
             version: version.to_string(),
-            source_url: source_url.to_string(),
-            download_url: fetched.source_url.clone(),
-            archive_sha256: fetched.archive_hash.clone(),
-            binary_sha256: binary_hash,
-            store_hash: store_path.hash[..12].to_string(),
+            variant: pkg.variant.clone(),
+            uri: source_url,
+            sha256: archive_hash,
+            bin_entry: store_path.entry_name,
+            is_dir,
+            installed_at: unix_now(),
         },
     );
 
@@ -143,193 +199,22 @@ pub fn remove(
     store: &Store,
     lock: &mut LockFile,
 ) -> Result<()> {
-    let locked = lock.get(name).ok_or_else(|| IkkError::PackageNotFound(name.to_string()))?.clone();
+    let locked = lock
+        .get(name)
+        .ok_or_else(|| IkkError::PackageNotFound(name.to_string()))?
+        .clone();
 
-    store.remove(name, &locked.version, &locked.store_hash)?;
-    remove_bin_link(&home.bin_dir().join(binary_name))?;
+    store.remove(name, &locked.version, &locked.bin_entry)?;
+    remove_bin_link(&home.bin_dir(), binary_name)?;
     lock.remove(name);
 
     tracing::info!("removed {}", name);
     Ok(())
 }
 
-// ── sync ──────────────────────────────────────────────────────────────────────
-
-pub struct SyncReport {
-    pub installed: Vec<String>,
-    pub removed: Vec<String>,
-    pub unchanged: Vec<String>,
-    pub failed: Vec<(String, String)>, // (name, error)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn sync(
-    config: &Config,
-    security: &crate::config::SecurityConfig,
-    home: &IkkHome,
-    registry: &dyn crate::remote::RemoteRegistry,
-    store: &Store,
-    lock: &mut LockFile,
-    lock_path: &std::path::Path,
-    http: &reqwest::Client,
-    platform: &Platform,
-) -> Result<SyncReport> {
-    let mut report =
-        SyncReport { installed: vec![], removed: vec![], unchanged: vec![], failed: vec![] };
-
-    // ── phase 1: resolve versions (sequential, fast API calls) ──────────────
-    struct Pending<'a> {
-        name: &'a str,
-        source: Box<dyn Source>,
-        version: String,
-        binary_name: String,
-        source_url: String,
-    }
-
-    let mut pending: Vec<Pending<'_>> = Vec::new();
-
-    for (name, pkg) in &config.packages {
-        let source = match make_source(pkg, config, registry, http, security) {
-            Ok(s) => s,
-            Err(e) => {
-                report.failed.push((name.clone(), e.to_string()));
-                continue;
-            }
-        };
-
-        let version = match source.version(&pkg.version, name).await {
-            Ok(v) => v,
-            Err(e) => {
-                report.failed.push((name.clone(), e.to_string()));
-                continue;
-            }
-        };
-
-        // already at this version — skip
-        if let Some(locked) = lock.get(name)
-            && locked.version == version
-        {
-            tracing::debug!("{} already at {version}", name);
-            report.unchanged.push(name.clone());
-            continue;
-        }
-
-        let binary_name = pkg.binary.as_deref().unwrap_or(name).to_string();
-        let source_url =
-            config.resolve_source(&pkg.source).map(|u| u.to_string()).unwrap_or_default();
-        pending.push(Pending { name, source, version, binary_name, source_url });
-    }
-
-    // ── phase 2: parallel fetch (I/O bound) ─────────────────────────────────
-    if !pending.is_empty() {
-        use std::sync::Arc;
-        use tokio::sync::Semaphore;
-
-        let semaphore = Arc::new(Semaphore::new(4));
-        let mut handles = Vec::with_capacity(pending.len());
-
-        for p in pending {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let name = p.name.to_string();
-            let source = p.source;
-            let version = p.version;
-            let binary_name = p.binary_name;
-            let source_url = p.source_url;
-            let platform = platform.clone();
-            let stage_dir = home.stage_dir();
-            let home_bin = home.bin_dir();
-
-            handles.push(tokio::spawn(async move {
-                let _permit = permit;
-                let result =
-                    source.fetch(&version, &binary_name, &platform, None, &stage_dir).await;
-                (name, version, binary_name, source_url, home_bin, result)
-            }));
-        }
-
-        // ── phase 3: sequential store + link + lock ─────────────────────────
-        for handle in handles {
-            let (name, version, binary_name, source_url, home_bin, fetch_result) =
-                match handle.await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        report.failed.push((String::new(), e.to_string()));
-                        continue;
-                    }
-                };
-
-            match fetch_result {
-                Ok(fetched) => {
-                    match commit(
-                        &name,
-                        &version,
-                        &binary_name,
-                        &source_url,
-                        &fetched,
-                        &home_bin,
-                        store,
-                        lock,
-                    ) {
-                        Ok(()) => {
-                            tracing::info!("installed {}@{}", name, version);
-                            report.installed.push(name);
-                            let _ = lock.save(lock_path);
-                        }
-                        Err(e) => {
-                            report.failed.push((name, e.to_string()));
-                        }
-                    }
-                }
-                Err(e) => {
-                    report.failed.push((name, e.to_string()));
-                }
-            }
-        }
-    }
-
-    // ── remove packages in lock but not in config ───────────────────────────
-    let to_remove: Vec<_> =
-        lock.packages.keys().filter(|n| !config.packages.contains_key(*n)).cloned().collect();
-
-    for name in to_remove {
-        let binary = config
-            .packages
-            .get(&name)
-            .and_then(|p| p.binary.as_deref())
-            .unwrap_or(&name)
-            .to_string();
-        match remove(&name, &binary, home, store, lock) {
-            Ok(_) => report.removed.push(name),
-            Err(e) => report.failed.push((name, e.to_string())),
-        }
-    }
-
-    // final save — captures all removes
-    lock.save(lock_path)?;
-
-    Ok(report)
-}
-
-// ── self-uninstall ────────────────────────────────────────────────────────────
-
-pub fn self_uninstall(home: &IkkHome) -> Result<()> {
-    // remove shell integration first
-    let shell = crate::shell::Shell::detect();
-    let _ = crate::shell::remove_path_integration(&shell);
-
-    // remove ~/.ikk entirely
-    if home.root.exists() {
-        std::fs::remove_dir_all(&home.root)?;
-    }
-
-    tracing::info!("ikk uninstalled — removed {}", home.root.display());
-    Ok(())
-}
-
-// ── bin dir symlink management ────────────────────────────────────────────────
+// ── bin dir link helpers ──────────────────────────────────────────────────────
 
 fn create_bin_link(src: &Path, dst: &Path) -> Result<()> {
-    // remove existing link if present
     if dst.exists() || dst.symlink_metadata().is_ok() {
         std::fs::remove_file(dst).ok();
     }
@@ -339,7 +224,6 @@ fn create_bin_link(src: &Path, dst: &Path) -> Result<()> {
 
     #[cfg(windows)]
     {
-        // try symlink first (requires Developer Mode), fall back to copy
         if std::os::windows::fs::symlink_file(src, dst).is_err() {
             std::fs::copy(src, dst)?;
         }
@@ -348,9 +232,24 @@ fn create_bin_link(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn remove_bin_link(dst: &Path) -> Result<()> {
-    if dst.exists() || dst.symlink_metadata().is_ok() {
-        std::fs::remove_file(dst)?;
+fn remove_bin_link(bin_dir: &Path, name: &str) -> Result<()> {
+    let path = bin_dir.join(name);
+    if path.exists() || path.symlink_metadata().is_ok() {
+        std::fs::remove_file(&path)?;
     }
+    Ok(())
+}
+
+// ── self-uninstall ────────────────────────────────────────────────────────────
+
+pub fn self_uninstall(home: &IkkHome) -> Result<()> {
+    let shell = crate::shell::Shell::detect();
+    let _ = crate::shell::remove_path_integration(&shell);
+
+    if home.root.exists() {
+        std::fs::remove_dir_all(&home.root)?;
+    }
+
+    tracing::info!("ikk uninstalled — removed {}", home.root.display());
     Ok(())
 }

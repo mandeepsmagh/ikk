@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod commands;
 use commands::{
-    add, check, config, gc, info, init, list, remove, self_update, sync, uninstall, upgrade,
+    add, check, config, gc, info, init, list, remove, run, self_update, sync, uninstall, upgrade,
 };
 
 #[derive(Parser)]
@@ -11,7 +11,7 @@ use commands::{
     name    = "ikk",
     about   = "ਇੱਕ — one version, one truth, one command",
     version = env!("CARGO_PKG_VERSION"),
-    after_help = "EXAMPLES:\n  ikk init --remote github.com\n  ikk add BurntSushi/ripgrep\n  ikk add sharkdp/fd\n  ikk sync\n  ikk check\n  ikk upgrade\n  ikk info ripgrep\n  ikk remove fd\n  ikk uninstall --yes",
+    after_help = "EXAMPLES:\n  ikk init\n  ikk install ripgrep --uri BurntSushi/ripgrep --version 14.1.1\n  ikk sync\n  ikk check\n  ikk upgrade\n  ikk info ripgrep\n  ikk remove ripgrep\n  ikk uninstall --yes",
 )]
 struct Cli {
     /// Override ikk home directory (default: ~/.ikk)
@@ -24,53 +24,58 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Initialise ikk on this machine — creates ~/.ikk and adds to PATH
+    /// Initialise ikk — creates ~/.ikk and adds to PATH
     #[command(visible_alias = "setup")]
     Init(init::InitArgs),
 
-    /// Sync installed packages to match ikk.toml — install, upgrade, and remove as needed
+    /// Install a package from a forge, URL template, or local path
+    #[command(visible_alias = "add")]
+    Install(add::AddArgs),
+
+    /// Sync installed packages to match ikk.toml
     Sync(sync::SyncArgs),
 
-    /// Add a package from a forge (owner/repo) or local path
-    #[command(visible_alias = "install")]
-    Add(add::AddArgs),
-
-    /// Remove a package and its symlink
+    /// Remove a package
+    #[command(visible_alias = "rm")]
     Remove(remove::RemoveArgs),
 
-    /// Upgrade packages to latest versions (skips pinned by default)
+    /// Upgrade one or all packages
     Upgrade(upgrade::UpgradeArgs),
 
-    /// Verify integrity — checks lock file merkle root and all binary hashes
+    /// Verify integrity of lock file and all binaries
     Check,
 
-    /// Show details about an installed package
+    /// Show installed package details
     Info(info::InfoArgs),
 
-    /// List configured packages and their install status
+    /// List configured packages
     #[command(visible_alias = "ls")]
     List(list::ListArgs),
 
-    /// Completely remove ikk from this machine (all packages, config, PATH entry)
-    #[command(visible_alias = "rmrf")]
-    Uninstall(uninstall::UninstallArgs),
-
-    /// Update ikk itself to the latest release
-    SelfUpdate(self_update::SelfUpdateArgs),
+    /// Run a binary from a multi-file package directory
+    Run(run::RunArgs),
 
     /// Get or set config values
     Config(config::ConfigArgs),
 
-    /// Remove unused packages from the store
+    /// Remove unused store entries
     #[command(visible_alias = "clean")]
     Gc(gc::GcArgs),
+
+    /// Update ikk itself
+    SelfUpdate(self_update::SelfUpdateArgs),
+
+    /// Completely remove ikk from this machine
+    #[command(visible_alias = "rmrf")]
+    Uninstall(uninstall::UninstallArgs),
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env().add_directive("ikk=info".parse()?),
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("ikk=info".parse()?),
         )
         .without_time()
         .with_target(false)
@@ -85,16 +90,17 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Init(args) => init::run(args, &home).await,
+        Command::Install(args) => add::run(args, &home).await,
         Command::Sync(args) => sync::run(args, &home).await,
-        Command::Add(args) => add::run(args, &home).await,
         Command::Remove(args) => remove::run(args, &home),
         Command::Upgrade(args) => upgrade::run(args, &home).await,
         Command::Check => check::run(&home),
         Command::Info(args) => info::run(args, &home),
         Command::List(args) => list::run(args, &home),
-        Command::Uninstall(args) => uninstall::run(args, &home),
-        Command::SelfUpdate(args) => self_update::run(args, &home).await,
+        Command::Run(args) => run::run(args, &home),
         Command::Config(args) => config::run(args, &home),
         Command::Gc(args) => gc::run(args, &home),
+        Command::SelfUpdate(args) => self_update::run(args, &home).await,
+        Command::Uninstall(args) => uninstall::run(args, &home),
     }
 }

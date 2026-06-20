@@ -8,7 +8,7 @@ use ikk_core::{
 
 #[derive(Args)]
 pub struct InitArgs {
-    /// Skip all prompts — for scripting and automation
+    /// Skip prompts — for scripting
     #[arg(long, short)]
     pub silent: bool,
 
@@ -23,10 +23,6 @@ pub struct InitArgs {
     /// Do not modify shell rc file
     #[arg(long)]
     pub no_shell: bool,
-
-    /// Show what would happen without making changes
-    #[arg(long)]
-    pub dry_run: bool,
 }
 
 #[derive(clap::ValueEnum, Clone)]
@@ -51,21 +47,14 @@ impl From<ShellArg> for Shell {
 }
 
 pub async fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
-    if args.dry_run {
-        println!("would create: {}", home.root.display());
-        println!("would create: {}", home.config_file().display());
-        println!("would add to PATH: {}", home.bin_dir().display());
-        return Ok(());
-    }
-
-    // create directory layout
+    // Create directory layout
     home.init_dirs()?;
 
-    // resolve default remote
+    // Resolve default remote
     let remote =
         if args.silent { args.remote.clone() } else { prompt_remote(args.remote.as_deref())? };
 
-    // write config if not already present
+    // Write config if not already present
     let config_path = home.config_file();
     if !config_path.exists() {
         let mut config = Config::default();
@@ -76,18 +65,14 @@ pub async fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
         println!("config already exists — skipping");
     }
 
-    // shell integration
+    // Shell integration
     if !args.no_shell {
         let shell = args.shell.map(Shell::from).unwrap_or_else(Shell::detect);
-        if args.dry_run {
-            println!("would add {} to PATH in {:?}", home.bin_dir().display(), shell.rc_file());
-        } else {
-            match install_path_integration(&shell, &home.bin_dir())? {
-                true => {
-                    println!("added {} to PATH in {:?}", home.bin_dir().display(), shell.rc_file())
-                }
-                false => println!("PATH already configured"),
+        match install_path_integration(&shell, &home.bin_dir())? {
+            true => {
+                println!("added {} to PATH in {:?}", home.bin_dir().display(), shell.rc_file())
             }
+            false => println!("PATH already configured"),
         }
     }
 
@@ -96,7 +81,7 @@ pub async fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
     if let Some(r) = &remote {
         println!("default remote: {r}");
     } else {
-        println!("no default remote set — specify host in each package source");
+        println!("no default remote set — specify host in each package URI");
     }
 
     if !args.silent {
@@ -114,7 +99,7 @@ fn prompt_remote(preset: Option<&str>) -> Result<Option<String>> {
         return Ok(Some(r.to_string()));
     }
 
-    print!("default remote host (e.g. github.com, codeberg.org) — leave empty to skip: ");
+    print!("default remote host (e.g. github.com) — enter to skip: ");
     use std::io::{self, BufRead, Write};
     io::stdout().flush()?;
 

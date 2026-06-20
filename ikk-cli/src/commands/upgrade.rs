@@ -1,13 +1,11 @@
-// ── upgrade ───────────────────────────────────────────────────────────────────
-
 use super::Ctx;
 use anyhow::Result;
 use clap::Args;
-use ikk_core::{home::IkkHome, ops};
+use ikk_core::{home::IkkHome, ops, remote::RemoteRegistry};
 
 #[derive(Args)]
 pub struct UpgradeArgs {
-    /// Upgrade a specific package only (upgrades all if not set)
+    /// Upgrade a specific package (all if not set)
     pub name: Option<String>,
 
     /// Force upgrade even if version is pinned
@@ -26,32 +24,47 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
     let mut any_change = false;
 
     for name in &names {
-        let pkg = ctx
-            .config
-            .packages
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("package '{}' not found in config", name))?
-            .clone();
+        let Some(pkg) = ctx.config.packages.get(name).cloned() else {
+            anyhow::bail!("package '{name}' not found in config");
+        };
 
-        // skip pinned unless --force
-        if pkg.version != "latest" && !args.force {
-            println!("  {name} pinned at {} — skipping (use --force to override)", pkg.version);
+        // Skip pinned unless --force
+        if pkg.version.as_deref() != Some("latest") && !args.force {
+            println!(
+                "  {name} pinned at {} — skipping (use --force to override)",
+                pkg.version.as_deref().unwrap_or("?")
+            );
             continue;
         }
 
         let before = ctx.lock.get(name).map(|l| l.version.clone());
 
-        let req = ops::InstallRequest {
-            name,
-            pkg: &pkg,
-            config: &ctx.config,
-            platform: &ctx.platform,
-            home: &ctx.home,
-        };
+        let mode = ikk_core::config::PackageMode::classify(
+            &pkg.uri,
+            ctx.config.defaults.remote.as_deref(),
+            pkg.build.is_some(),
+        )?;
 
-        let source =
-            ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
-        ops::install(&req, &*source, &ctx.store, &mut ctx.lock).await?;
+        match mode {
+            ikk_core::config::PackageMode::ForgeDiscovery => {
+                let url = ctx.config.resolve_uri(&pkg.uri)?;
+                let remote = ctx.registry.remote_for(&url)?;
+
+                let req = ops::InstallRequest {
+                    name,
+                    pkg: &pkg,
+                    config: &ctx.config,
+                    platform: &ctx.platform,
+                    home: &ctx.home,
+                };
+
+                ops::install(&req, &*remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock).await?;
+            }
+            _ => {
+                println!("  {name}: upgrade only supported for forge packages in Stage 1");
+                continue;
+            }
+        }
 
         let after = ctx.lock.get(name).map(|l| l.version.clone());
 

@@ -1,9 +1,8 @@
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 
-use crate::config::{BuildConfig, BuildSystem, SecurityConfig};
+use crate::config::SecurityConfig;
 use crate::error::{IkkError, Result};
-use crate::extract::best_asset;
 use crate::platform::Platform;
 use crate::remote::Remote;
 use crate::store::sha256_hex;
@@ -14,16 +13,19 @@ pub struct FetchedBinary {
     pub binary_bytes: Vec<u8>,
     pub archive_hash: String,
     pub source_url: String,
+    /// The actual binary filename detected in the archive.
+    pub detected_name: String,
 }
 
 // ── source trait ────────────────────────────────────────────────────────────
 
 #[async_trait]
 pub trait Source: Send + Sync {
-    /// Resolve a version spec: pinned `"1.2.3"` → `"1.2.3"`, `"latest"` → concrete version.
+    /// Resolve "latest" to a concrete version via forge API.
+    /// Returns the version as-is if already pinned.
     async fn version(&self, spec: &str, name: &str) -> Result<String>;
 
-    /// Fetch the binary — download + extract (remote) or read + build (local).
+    /// Fetch binary bytes from remote or local.
     async fn fetch(
         &self,
         version: &str,
@@ -34,23 +36,18 @@ pub trait Source: Send + Sync {
     ) -> Result<FetchedBinary>;
 }
 
-// ── remote source ───────────────────────────────────────────────────────────
+// ── remote source (forge discovery) ─────────────────────────────────────────
 
+#[allow(dead_code)]
 pub(crate) struct RemoteSource {
     remote: Box<dyn Remote>,
     http: std::sync::Arc<reqwest::Client>,
     security: SecurityConfig,
-    age_override: Option<u64>,
 }
 
 impl RemoteSource {
-    pub fn new(
-        remote: Box<dyn Remote>,
-        http: std::sync::Arc<reqwest::Client>,
-        security: SecurityConfig,
-        age_override: Option<u64>,
-    ) -> Self {
-        Self { remote, http, security, age_override }
+    pub fn new(remote: Box<dyn Remote>, http: std::sync::Arc<reqwest::Client>, security: SecurityConfig) -> Self {
+        Self { remote, http, security }
     }
 }
 
@@ -64,27 +61,23 @@ impl Source for RemoteSource {
         let release = self.remote.latest().await?;
 
         if release.prerelease || release.draft {
-            return Err(IkkError::Store("latest release is a prerelease or draft".into()));
+            return Err(IkkError::Store(
+                "latest release is a prerelease or draft — pin a specific version".into(),
+            ));
         }
 
         if !self.security.is_old_enough(release.published_at.as_deref()) {
-            // per-package override: 0 = always allow, n = use n days instead of global
-            if self.age_override != Some(0) {
-                let age_days = release
-                    .published_at
-                    .as_deref()
-                    .and_then(crate::config::days_since_iso8601)
-                    .unwrap_or(0);
-                let min_days = self.age_override.unwrap_or(self.security.min_release_age_days);
-                if age_days < min_days {
-                    return Err(IkkError::ReleaseTooRecent {
-                        name: name.to_string(),
-                        version: release.version,
-                        age_days,
-                        min_days,
-                    });
-                }
-            }
+            let age_days = release
+                .published_at
+                .as_deref()
+                .and_then(crate::config::days_since_iso8601)
+                .unwrap_or(0);
+            return Err(IkkError::ReleaseTooRecent {
+                name: name.to_string(),
+                version: release.version.clone(),
+                age_days,
+                min_days: self.security.min_release_age_days,
+            });
         }
 
         Ok(release.version)
@@ -99,7 +92,7 @@ impl Source for RemoteSource {
         stage_dir: &Path,
     ) -> Result<FetchedBinary> {
         let assets = self.remote.assets(version).await?;
-        let asset = best_asset(&assets, platform, preferred_binary)?;
+        let asset = crate::extract::best_asset(&assets, platform, preferred_binary)?;
 
         tracing::info!("downloading {}…", asset.name);
         let bytes = self.http.get(&asset.url).send().await?.bytes().await?;
@@ -109,24 +102,29 @@ impl Source for RemoteSource {
 
         let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
         let binary_bytes = std::fs::read(&binary_path)?;
+        let detected_name = binary_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(binary_name)
+            .to_string();
 
-        // clean up stage
         let _ = std::fs::remove_file(&binary_path);
 
-        Ok(FetchedBinary { binary_bytes, archive_hash, source_url: asset.url.clone() })
+        Ok(FetchedBinary { binary_bytes, archive_hash, source_url: asset.url.clone(), detected_name })
     }
 }
 
 // ── local source ────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub(crate) struct LocalSource {
     path: PathBuf,
     is_dir: bool,
-    build: Option<BuildConfig>,
+    build: Option<Vec<String>>,
 }
 
 impl LocalSource {
-    pub fn new(path: PathBuf, is_dir: bool, build: Option<BuildConfig>) -> Self {
+    pub fn new(path: PathBuf, is_dir: bool, build: Option<Vec<String>>) -> Self {
         Self { path, is_dir, build }
     }
 }
@@ -154,9 +152,9 @@ impl Source for LocalSource {
 
         let source_url = self.path.display().to_string();
 
-        let (binary_bytes, archive_hash) = if self.is_dir {
-            let bytes = build_local(&self.path, binary_name, self.build.as_ref())?;
-            (bytes, String::new())
+        let (binary_bytes, archive_hash, detected_name) = if self.is_dir {
+            let bytes = build_local(&self.path, binary_name, self.build.as_deref())?;
+            (bytes, String::new(), binary_name.to_string())
         } else {
             let bytes = std::fs::read(&self.path)?;
             let archive_hash = sha256_hex(&bytes);
@@ -166,52 +164,49 @@ impl Source for LocalSource {
                 binary_name,
                 stage_dir,
             )?;
-            (std::fs::read(&binary_path)?, archive_hash)
+            let detected = binary_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(binary_name)
+                .to_string();
+            (std::fs::read(&binary_path)?, archive_hash, detected)
         };
 
-        Ok(FetchedBinary { binary_bytes, archive_hash, source_url })
+        Ok(FetchedBinary { binary_bytes, archive_hash, source_url, detected_name })
     }
 }
 
 // ── local build ─────────────────────────────────────────────────────────────
 
-fn build_local(dir: &Path, binary_name: &str, build: Option<&BuildConfig>) -> Result<Vec<u8>> {
+#[allow(dead_code)]
+fn build_local(dir: &Path, binary_name: &str, build: Option<&[String]>) -> Result<Vec<u8>> {
     use std::process::Command;
 
-    let build = build.ok_or_else(|| IkkError::BuildFailed {
+    let commands = build.ok_or_else(|| IkkError::BuildFailed {
         name: binary_name.to_string(),
-        reason: "local directory source requires a [build] section".into(),
+        reason: "local directory source requires a [build] section with shell commands".into(),
     })?;
 
-    let status = match &build.system {
-        BuildSystem::Cargo => {
-            Command::new("cargo").args(["build", "--release"]).current_dir(dir).status()?
-        }
-        BuildSystem::Make => Command::new("make").current_dir(dir).status()?,
-        BuildSystem::Cmake => {
-            std::fs::create_dir_all(dir.join("build"))?;
-            Command::new("cmake").args([".."]).current_dir(dir.join("build")).status()?;
-            Command::new("cmake").args(["--build", "."]).current_dir(dir.join("build")).status()?
-        }
-        BuildSystem::Script => {
-            let script = build.script.as_deref().unwrap_or("./build.sh");
-            Command::new("sh").arg(script).current_dir(dir).status()?
-        }
-    };
+    for cmd in commands {
+        let status = if cfg!(windows) {
+            Command::new("cmd").args(["/C", cmd]).current_dir(dir).status()?
+        } else {
+            Command::new("sh").arg("-c").arg(cmd).current_dir(dir).status()?
+        };
 
-    if !status.success() {
-        return Err(IkkError::BuildFailed {
-            name: binary_name.to_string(),
-            reason: format!("{:?} exited with {status}", build.system),
-        });
+        if !status.success() {
+            return Err(IkkError::BuildFailed {
+                name: binary_name.to_string(),
+                reason: format!("command `{cmd}` exited with {status}"),
+            });
+        }
     }
 
-    let bin_name = build.binary.as_deref().unwrap_or(binary_name);
-
+    // Scan for binary in common output locations
     let candidates = [
-        dir.join("target").join("release").join(bin_name),
-        dir.join("build").join(bin_name),
-        dir.join(bin_name),
+        dir.join("target").join("release").join(binary_name),
+        dir.join("build").join(binary_name),
+        dir.join(binary_name),
     ];
 
     for p in &candidates {
@@ -222,6 +217,6 @@ fn build_local(dir: &Path, binary_name: &str, build: Option<&BuildConfig>) -> Re
 
     Err(IkkError::BuildFailed {
         name: binary_name.to_string(),
-        reason: format!("binary '{bin_name}' not found after build"),
+        reason: format!("binary '{binary_name}' not found after build"),
     })
 }

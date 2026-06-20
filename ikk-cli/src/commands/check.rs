@@ -5,7 +5,7 @@ use ikk_core::{home::IkkHome, store::VerifyResult};
 pub fn run(home: &IkkHome) -> Result<()> {
     let ctx = Ctx::load(home)?;
 
-    // verify lock integrity
+    // Verify lock integrity
     println!("lock:     {}", home.lock_file().display());
     match ctx.lock.verify() {
         Ok(()) => println!("  ✓ merkle root valid"),
@@ -15,7 +15,7 @@ pub fn run(home: &IkkHome) -> Result<()> {
         }
     }
 
-    // verify store binaries
+    // Verify store binaries
     println!("\nstore:    {}", home.store_dir().display());
     let results = ctx.store.verify_all()?;
 

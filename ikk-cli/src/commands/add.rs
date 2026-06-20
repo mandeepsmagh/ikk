@@ -1,91 +1,89 @@
 use super::Ctx;
 use anyhow::Result;
 use clap::Args;
-use ikk_core::{config::PackageConfig, home::IkkHome, ops};
-
-// ── add ───────────────────────────────────────────────────────────────────────
+use ikk_core::{
+    config::{PackageConfig, PackageMode},
+    home::IkkHome,
+    ops,
+    remote::RemoteRegistry,
+};
 
 #[derive(Args)]
 #[command(
-    after_help = "EXAMPLES:\n  ikk add BurntSushi/ripgrep\n  ikk add sharkdp/fd --version 8.7.0\n  ikk add ~/Downloads/tool.tar.gz --name tool --binary tool-bin\n  ikk add ~/projects/myproject --build cargo --binary myproject"
+    after_help = "EXAMPLES:\n  ikk install ripgrep --uri BurntSushi/ripgrep --version 14.1.1\n  ikk install fd --uri sharkdp/fd --binary fd\n  ikk install mytool --uri file:///home/user/dev/mytool\n  ikk install llama-cpp --uri ggml-org/llama.cpp --variant cuda12"
 )]
 pub struct AddArgs {
-    /// Package source: owner/repo, host/owner/repo, full URL, or local path
-    pub source: String,
+    /// Package name (e.g. "ripgrep")
+    pub name: String,
 
-    /// Package name (defaults to repo name)
-    #[arg(long, short)]
-    pub name: Option<String>,
+    /// URI: owner/repo, https://host/owner/repo, https://.../{version}-{variant}.tar.gz,
+    /// or file:///path
+    #[arg(long)]
+    pub uri: String,
 
-    /// Version to install (default: latest)
-    #[arg(long, short, default_value = "latest")]
-    pub version: String,
+    /// Version: "latest", "14.1.1", or exact tag. Required for URL template mode.
+    #[arg(long)]
+    pub version: Option<String>,
 
-    /// Binary name inside archive (auto-detected if not set)
+    /// Variant label (e.g. "cuda12", "cpu")
+    #[arg(long)]
+    pub variant: Option<String>,
+
+    /// Binary name inside archive or build output (auto-detected if not set)
     #[arg(long)]
     pub binary: Option<String>,
 
-    /// Build from source using this build system
-    #[arg(long, value_enum)]
-    pub build: Option<BuildSystemArg>,
-}
+    /// Expected SHA-256 of the downloaded archive
+    #[arg(long)]
+    pub sha256: Option<String>,
 
-#[derive(clap::ValueEnum, Clone)]
-pub enum BuildSystemArg {
-    Cargo,
-    Make,
-    Cmake,
-    Script,
+    /// Build commands (semicolon-separated) — only for file:// directory URIs
+    #[arg(long, value_delimiter = ';')]
+    pub build: Option<Vec<String>>,
 }
 
 pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
     let mut ctx = Ctx::load(home)?;
 
-    // derive name from source if not provided
-    let name = args.name.unwrap_or_else(|| {
-        args.source
-            .split('/')
-            .next_back()
-            .unwrap_or(&args.source)
-            .trim_end_matches(".git")
-            .to_string()
-    });
-
-    let build = args.build.map(|b| ikk_core::config::BuildConfig {
-        system: match b {
-            BuildSystemArg::Cargo => ikk_core::config::BuildSystem::Cargo,
-            BuildSystemArg::Make => ikk_core::config::BuildSystem::Make,
-            BuildSystemArg::Cmake => ikk_core::config::BuildSystem::Cmake,
-            BuildSystemArg::Script => ikk_core::config::BuildSystem::Script,
-        },
-        binary: args.binary.clone(),
-        script: None,
-    });
-
     let pkg = PackageConfig {
-        source: args.source,
+        uri: args.uri.clone(),
         version: args.version,
+        variant: args.variant,
+        build: args.build,
         binary: args.binary,
-        build,
-        min_release_age_days: None,
+        sha256: args.sha256,
     };
 
-    let req = ikk_core::ops::InstallRequest {
-        name: &name,
-        pkg: &pkg,
-        config: &ctx.config,
-        platform: &ctx.platform,
-        home: &ctx.home,
-    };
+    let mode = PackageMode::classify(&args.uri, ctx.config.defaults.remote.as_deref(), pkg.build.is_some())?;
 
-    let source =
-        ops::make_source(&pkg, &ctx.config, &ctx.registry, &ctx.http, &ctx.config.security)?;
-    ops::install(&req, &*source, &ctx.store, &mut ctx.lock).await?;
+    match mode {
+        PackageMode::ForgeDiscovery => {
+            let url = ctx.config.resolve_uri(&args.uri)?;
+            let remote = ctx.registry.remote_for(&url)?;
 
-    // persist to config + lock
-    ctx.config.packages.insert(name, pkg);
+            let req = ops::InstallRequest {
+                name: &args.name,
+                pkg: &pkg,
+                config: &ctx.config,
+                platform: &ctx.platform,
+                home: &ctx.home,
+            };
+
+            ops::install(&req, &*remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock).await?;
+        }
+        PackageMode::UrlTemplate => {
+            anyhow::bail!("URL template mode not yet implemented (Stage 2)");
+        }
+        PackageMode::LocalBinary | PackageMode::LocalBuild => {
+            anyhow::bail!("local modes not yet implemented (Stage 3)");
+        }
+    }
+
+    // Persist
+    ctx.config.packages.insert(args.name.clone(), pkg);
     ctx.config.save(&home.config_file())?;
     ctx.lock.save(&home.lock_file())?;
 
+    println!("installed {}", args.name);
     Ok(())
 }
