@@ -383,29 +383,29 @@ fn set_executable_recursive(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn seal(path: &Path) -> Result<()> {
+fn seal(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555))?;
     }
     Ok(())
 }
 
-fn unseal(path: &Path) -> Result<()> {
+fn unseal(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
 }
 
-fn unseal_dir(path: &Path) -> Result<()> {
+fn unseal_dir(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
 }

@@ -15,7 +15,7 @@ impl Shell {
     pub fn detect() -> Self {
         #[cfg(windows)]
         {
-            return Shell::PowerShell;
+            Shell::PowerShell
         }
 
         #[cfg(not(windows))]
