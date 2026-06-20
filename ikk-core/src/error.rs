@@ -46,8 +46,8 @@ pub enum IkkError {
     NoStableRelease(String),
 
     // ── structured build errors ──────────────────────────────────────────────
-    #[error("build step `{command}` exited with code {exit_code} (package `{name}`)")]
-    BuildStepFailed { name: String, command: String, exit_code: i32 },
+    #[error("build step `{command}` exited with code {exit_code:?} (package `{name}`)")]
+    BuildStepFailed { name: String, command: String, exit_code: Option<i32> },
 
     #[error("binary '{binary}' not found after building '{name}' — check build output paths")]
     BuildBinaryNotFound { name: String, binary: String },

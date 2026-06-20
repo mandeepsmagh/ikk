@@ -1,3 +1,7 @@
+// TODO: Replace ops.rs fetch_forge/fetch_template paths with this Source trait.
+// Currently ops.rs has its own fetch logic that duplicates RemoteSource.
+// Once switched, ops.rs should go through Source::version + Source::fetch only.
+
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 
@@ -6,6 +10,8 @@ use crate::error::{IkkError, Result};
 use crate::platform::Platform;
 use crate::remote::Remote;
 use crate::store::sha256_hex;
+
+const LATEST: &str = "latest";
 
 // ── fetched binary ──────────────────────────────────────────────────────────
 
@@ -59,7 +65,7 @@ impl RemoteSource {
 #[async_trait]
 impl Source for RemoteSource {
     async fn version(&self, spec: &str, name: &str) -> Result<String> {
-        if spec != "latest" {
+        if spec != LATEST {
             return Ok(spec.to_string());
         }
 
@@ -103,6 +109,10 @@ impl Source for RemoteSource {
 
         let archive_hash = sha256_hex(bytes);
 
+        // Note: sha256 verification against user-supplied expected hash is the
+        // caller's responsibility (ops.rs does this). The archive_hash returned
+        // here is for the lock file, not for verification.
+
         let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
         let binary_bytes = std::fs::read(&binary_path)?;
         let detected_name =
@@ -138,7 +148,7 @@ impl LocalSource {
 #[async_trait]
 impl Source for LocalSource {
     async fn version(&self, spec: &str, _name: &str) -> Result<String> {
-        if spec != "latest" {
+        if spec != LATEST {
             return Ok(spec.to_string());
         }
         Ok("local".into())
@@ -172,7 +182,9 @@ impl Source for LocalSource {
             )?;
             let detected =
                 binary_path.file_name().and_then(|n| n.to_str()).unwrap_or(binary_name).to_string();
-            (std::fs::read(&binary_path)?, archive_hash, detected)
+            let binary_bytes = std::fs::read(&binary_path)?;
+            let _ = std::fs::remove_file(&binary_path); // clean up staged file
+            (binary_bytes, archive_hash, detected)
         };
 
         Ok(FetchedBinary { binary_bytes, archive_hash, source_url, detected_name })
@@ -203,11 +215,14 @@ pub(crate) fn build_local(
             return Err(IkkError::BuildStepFailed {
                 name: binary_name.to_string(),
                 command: cmd.clone(),
-                exit_code: status.code().unwrap_or(-1),
+                exit_code: status.code(),
             });
         }
     }
 
+    // Search for the output binary. The first two paths are Rust/Cargo defaults;
+    // the third is a generic fallback. Users can control output location via
+    // their build commands (e.g. "./configure --prefix=... && make install").
     let candidates = [
         dir.join("target").join("release").join(binary_name),
         dir.join("build").join(binary_name),
