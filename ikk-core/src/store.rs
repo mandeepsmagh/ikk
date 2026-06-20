@@ -49,7 +49,12 @@ impl Store {
     }
 
     /// Build the directory name for a store entry.
-    pub fn entry_name(name: &str, version: &str, variant: Option<&str>, binary_hash: &str) -> String {
+    pub fn entry_name(
+        name: &str,
+        version: &str,
+        variant: Option<&str>,
+        binary_hash: &str,
+    ) -> String {
         let hash_prefix = &binary_hash[..12.min(binary_hash.len())];
         let base = format!("{hash_prefix}-{name}-{version}");
         match variant {
@@ -59,7 +64,13 @@ impl Store {
     }
 
     /// Fully qualified path to a store entry directory.
-    pub fn entry_path(&self, name: &str, version: &str, variant: Option<&str>, binary_hash: &str) -> PathBuf {
+    pub fn entry_path(
+        &self,
+        name: &str,
+        version: &str,
+        variant: Option<&str>,
+        binary_hash: &str,
+    ) -> PathBuf {
         self.root.join(Self::entry_name(name, version, variant, binary_hash))
     }
 
@@ -75,8 +86,7 @@ impl Store {
                 let path = e.path();
                 let entry_name = e.file_name().to_string_lossy().to_string();
                 let meta: StoreMeta =
-                    toml::from_str(&std::fs::read_to_string(path.join("meta.toml")).ok()?)
-                        .ok()?;
+                    toml::from_str(&std::fs::read_to_string(path.join("meta.toml")).ok()?).ok()?;
                 Some(StorePath {
                     hash: meta.binary_sha256.clone(),
                     name: meta.name.clone(),
@@ -285,13 +295,23 @@ mod tests {
 
     #[test]
     fn entry_name_no_variant() {
-        let name = Store::entry_name("ripgrep", "14.1.1", None, "abcdef1234567890abcdef1234567890abcdef12");
+        let name = Store::entry_name(
+            "ripgrep",
+            "14.1.1",
+            None,
+            "abcdef1234567890abcdef1234567890abcdef12",
+        );
         assert_eq!(name, "abcdef123456-ripgrep-14.1.1");
     }
 
     #[test]
     fn entry_name_with_variant() {
-        let name = Store::entry_name("llama-cpp", "b5262", Some("cuda12"), "def456789012def456789012def456789012def456");
+        let name = Store::entry_name(
+            "llama-cpp",
+            "b5262",
+            Some("cuda12"),
+            "def456789012def456789012def456789012def456",
+        );
         assert_eq!(name, "def456789012-llama-cpp-b5262-cuda12");
     }
 
@@ -347,7 +367,9 @@ mod tests {
         assert_ne!(sp1.entry_name, sp2.entry_name, "different variant → different entry name");
 
         // Different binary content → different entry
-        let sp3 = store.insert("llama", "b5262", Some("cpu"), b"different binary content", "url", "ghi").unwrap();
+        let sp3 = store
+            .insert("llama", "b5262", Some("cpu"), b"different binary content", "url", "ghi")
+            .unwrap();
         assert_ne!(sp1.entry_name, sp3.entry_name, "different binary → different entry");
 
         let _ = std::fs::remove_dir_all(&dir);

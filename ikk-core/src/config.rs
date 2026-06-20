@@ -262,8 +262,8 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let s = toml::to_string_pretty(self)
-            .map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
+        let s =
+            toml::to_string_pretty(self).map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
         std::fs::write(path, s)?;
         Ok(())
     }
@@ -306,8 +306,7 @@ impl Config {
     /// Resolve a package URI to a full `url::Url`, expanding shorthand if needed.
     pub fn resolve_uri(&self, uri: &str) -> Result<url::Url> {
         let expanded = Self::expand_uri(uri, self.defaults.remote.as_deref());
-        url::Url::parse(&expanded)
-            .map_err(|e| IkkError::MalformedUri(format!("{expanded}: {e}")))
+        url::Url::parse(&expanded).map_err(|e| IkkError::MalformedUri(format!("{expanded}: {e}")))
     }
 
     /// Get a package config by name.
@@ -322,10 +321,7 @@ mod tests {
 
     #[test]
     fn expand_shorthand() {
-        assert_eq!(
-            Config::expand_uri("foo/bar", Some("github.com")),
-            "https://github.com/foo/bar"
-        );
+        assert_eq!(Config::expand_uri("foo/bar", Some("github.com")), "https://github.com/foo/bar");
         assert_eq!(
             Config::expand_uri("codeberg.org/helix/helix", None),
             "https://codeberg.org/helix/helix"
@@ -334,10 +330,7 @@ mod tests {
             Config::expand_uri("https://example.com/tool.tar.gz", None),
             "https://example.com/tool.tar.gz"
         );
-        assert_eq!(
-            Config::expand_uri("/usr/local/bin/tool", None),
-            "/usr/local/bin/tool"
-        );
+        assert_eq!(Config::expand_uri("/usr/local/bin/tool", None), "/usr/local/bin/tool");
     }
 
     #[test]
@@ -351,12 +344,8 @@ mod tests {
             PackageMode::ForgeDiscovery
         );
         assert_eq!(
-            PackageMode::classify(
-                "https://example.com/tool-{version}.tar.gz",
-                None,
-                false
-            )
-            .unwrap(),
+            PackageMode::classify("https://example.com/tool-{version}.tar.gz", None, false)
+                .unwrap(),
             PackageMode::UrlTemplate
         );
         assert_eq!(
@@ -438,14 +427,17 @@ remote = "github.com"
         let config: Config = toml::from_str(toml).unwrap();
         // Insert a package with reserved name programmatically
         let mut config = config;
-        config.packages.insert("defaults".into(), PackageConfig {
-            uri: "foo/bar".into(),
-            version: None,
-            variant: None,
-            build: None,
-            binary: None,
-            sha256: None,
-        });
+        config.packages.insert(
+            "defaults".into(),
+            PackageConfig {
+                uri: "foo/bar".into(),
+                version: None,
+                variant: None,
+                build: None,
+                binary: None,
+                sha256: None,
+            },
+        );
         assert!(config.validate().is_err());
     }
 }

@@ -54,7 +54,8 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
         home: &ctx.home,
     };
 
-    ops::install(&req, &*remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock).await?;
+    ops::install(&req, &*remote, &ctx.http, &ctx.config.security, &ctx.store, &mut ctx.lock)
+        .await?;
     ctx.lock.save(&home.lock_file())?;
 
     println!("ikk updated to {} — restart your shell or run:", latest_release.version);

@@ -1,12 +1,7 @@
 use super::Ctx;
 use anyhow::Result;
 use clap::Args;
-use ikk_core::{
-    config::PackageMode,
-    home::IkkHome,
-    ops,
-    remote::RemoteRegistry,
-};
+use ikk_core::{config::PackageMode, home::IkkHome, ops, remote::RemoteRegistry};
 
 #[derive(Args)]
 pub struct SyncArgs {
@@ -20,7 +15,7 @@ pub async fn run(_args: SyncArgs, home: &IkkHome) -> Result<()> {
 
     let mut installed = vec![];
     let mut removed = vec![];
-    let mut unchanged: Vec<String> = vec![];
+    let unchanged: Vec<String> = vec![];
     let mut failed = vec![];
 
     for (name, pkg) in ctx.config.packages.clone() {
@@ -91,9 +86,18 @@ pub async fn run(_args: SyncArgs, home: &IkkHome) -> Result<()> {
                     Err(e) => failed.push((name, e.to_string())),
                 }
             }
-            _ => {
-                unchanged.push(name);
-                continue; // Local modes — Stage 3
+            PackageMode::LocalBinary | PackageMode::LocalBuild => {
+                let req = ops::InstallRequest {
+                    name: &name,
+                    pkg: &pkg,
+                    config: &ctx.config,
+                    platform: &ctx.platform,
+                    home: &ctx.home,
+                };
+                match ops::install_local(&req, &ctx.store, &mut ctx.lock) {
+                    Ok(()) => installed.push(name),
+                    Err(e) => failed.push((name, e.to_string())),
+                }
             }
         }
     }
