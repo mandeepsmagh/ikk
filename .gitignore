@@ -5,3 +5,8 @@ target
 
 *.DS_Store
 
+# Test artifacts
+*.tar.gz
+*.tar.xz
+*.zip
+

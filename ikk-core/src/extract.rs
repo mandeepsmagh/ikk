@@ -537,10 +537,10 @@ fn name_match_score(filename: &str, binary_name: &str) -> u32 {
 /// Score how likely a file is to be a binary (not data). Higher = more binary-like.
 pub fn exe_score(filename: &str) -> u32 {
     let f = filename.to_lowercase();
-    // data files — reject
+    // data files and shared libraries — reject
     for ext in [
         "ico", "png", "jpg", "svg", "txt", "md", "json", "toml", "yaml", "yml", "xml", "html",
-        "css", "js", "ts",
+        "css", "js", "ts", "so", "dylib", "dll", "a", "lib",
     ] {
         if f.ends_with(ext) {
             return 0;
