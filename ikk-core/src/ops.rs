@@ -7,9 +7,11 @@ use crate::{
     lock::{LockFile, LockedPackage, unix_now},
     platform::Platform,
     remote::Remote,
-    source::build_local,
+    source::{FetchedBinary, RemoteSource, Source, build_local},
     store::{Store, sha256_hex},
 };
+
+const LATEST: &str = "latest";
 
 pub struct InstallRequest<'a> {
     pub name: &'a str,
@@ -19,16 +21,11 @@ pub struct InstallRequest<'a> {
     pub home: &'a IkkHome,
 }
 
-enum CommitPayload {
-    Binary(Vec<u8>),
-    Directory(PathBuf),
-}
-
-// ── forge discovery ──────────────────────────────────────────────────────────
+// ── forge discovery (via Source trait) ──────────────────────────────────────
 
 pub async fn install(
     req: &InstallRequest<'_>,
-    remote: &dyn Remote,
+    remote: Box<dyn Remote>,
     http: &reqwest::Client,
     security: &SecurityConfig,
     store: &Store,
@@ -36,8 +33,9 @@ pub async fn install(
 ) -> Result<()> {
     let name = req.name;
     let pkg = req.pkg;
-    let binary_name = pkg.binary.as_deref().unwrap_or(name);
-    let version = resolve_version(name, pkg, remote, security).await?;
+
+    let source = RemoteSource::new(remote, std::sync::Arc::new(http.clone()), security.clone());
+    let version = source.version(pkg.version.as_deref().unwrap_or(LATEST), name).await?;
 
     if let Some(locked) = lock.get(name)
         && locked.version == version
@@ -47,35 +45,24 @@ pub async fn install(
         return Ok(());
     }
 
-    let assets = remote.assets(&version).await?;
-    let asset = crate::extract::best_asset(&assets, req.platform, pkg.binary.as_deref())?;
-    tracing::info!("downloading {}…", asset.name);
-    let bytes = crate::progress::download_bytes(http, &asset.url, &asset.name).await?;
+    let binary_name = pkg.binary.as_deref().unwrap_or(name);
+    let fetched = source
+        .fetch(&version, binary_name, req.platform, pkg.binary.as_deref(), &req.home.stage_dir())
+        .await?;
 
-    let (payload, archive_hash, source_url, is_dir) = process_downloaded_bytes(
-        name,
-        &version,
-        binary_name,
-        pkg,
-        &bytes,
-        &asset.name,
-        &asset.url,
-        &req.home.stage_dir(),
-    )?;
+    // sha256 check (caller's responsibility per Source trait contract)
+    if let Some(expected) = &pkg.sha256
+        && fetched.archive_hash != *expected
+    {
+        return Err(IkkError::HashMismatch {
+            name: name.to_string(),
+            version: version.clone(),
+            expected: expected.clone(),
+            actual: fetched.archive_hash.clone(),
+        });
+    }
 
-    commit(
-        name,
-        &version,
-        binary_name,
-        pkg,
-        source_url,
-        archive_hash,
-        payload,
-        is_dir,
-        store,
-        lock,
-        &req.home.bin_dir(),
-    )?;
+    commit(name, &version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir())?;
     tracing::info!("installed {}@{}", name, version);
     Ok(())
 }
@@ -104,32 +91,24 @@ pub async fn install_template(
     let download_url = resolve_uri_template(&pkg.uri, version, pkg.variant.as_deref())?;
     tracing::info!("downloading {}…", download_url);
     let bytes = crate::progress::download_bytes(http, &download_url, binary_name).await?;
-    let filename = download_url.rsplit('/').next().unwrap_or("download");
+    let archive_hash = sha256_hex(&bytes);
 
-    let (payload, archive_hash, source_url, is_dir) = process_downloaded_bytes(
-        name,
-        version,
-        binary_name,
-        pkg,
-        &bytes,
-        filename,
-        &download_url,
-        &req.home.stage_dir(),
-    )?;
+    if let Some(expected) = &pkg.sha256
+        && archive_hash != *expected
+    {
+        return Err(IkkError::HashMismatch {
+            name: name.to_string(),
+            version: version.to_string(),
+            expected: expected.clone(),
+            actual: archive_hash,
+        });
+    }
 
-    commit(
-        name,
-        version,
-        binary_name,
-        pkg,
-        source_url,
-        archive_hash,
-        payload,
-        is_dir,
-        store,
-        lock,
-        &req.home.bin_dir(),
-    )?;
+    // Use directory detection same as forge path
+    let fetched =
+        process_downloaded_bytes(binary_name, &bytes, &download_url, &req.home.stage_dir())?;
+    commit(name, version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir());
+
     tracing::info!("installed {}@{}", name, version);
     Ok(())
 }
@@ -151,9 +130,15 @@ pub fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFil
     let source_url = path.display().to_string();
     let is_source_dir = path.is_dir();
 
-    let (payload, archive_hash, is_dir) = if is_source_dir {
+    let fetched = if is_source_dir {
         let bytes = build_local(&path, binary_name, pkg.build.as_deref())?;
-        (CommitPayload::Binary(bytes), String::new(), false) // build produces a single binary, not a directory
+        FetchedBinary {
+            binary_bytes: bytes,
+            archive_hash: String::new(),
+            source_url,
+            detected_name: binary_name.to_string(),
+            is_dir: false,
+        }
     } else {
         let bytes = std::fs::read(&path)?;
         let archive_hash = sha256_hex(&bytes);
@@ -165,50 +150,30 @@ pub fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFil
         )?;
         let binary_bytes = std::fs::read(&binary_path)?;
         let _ = std::fs::remove_file(&binary_path);
-        (CommitPayload::Binary(binary_bytes), archive_hash, false)
+        FetchedBinary {
+            binary_bytes,
+            archive_hash,
+            source_url,
+            detected_name: binary_name.to_string(),
+            is_dir: false,
+        }
     };
 
-    commit(
-        name,
-        version,
-        binary_name,
-        pkg,
-        source_url,
-        archive_hash,
-        payload,
-        is_dir,
-        store,
-        lock,
-        &req.home.bin_dir(),
-    )?;
+    commit(name, version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir())?;
     tracing::info!("installed {} (local)", name);
     Ok(())
 }
 
-// ── shared download processing ───────────────────────────────────────────────
+// ── shared ───────────────────────────────────────────────────────────────────
 
 fn process_downloaded_bytes(
-    name: &str,
-    version: &str,
     binary_name: &str,
-    pkg: &PackageConfig,
     bytes: &[u8],
-    filename: &str,
     download_url: &str,
     stage_dir: &Path,
-) -> Result<(CommitPayload, String, String, bool)> {
+) -> Result<FetchedBinary> {
     let archive_hash = sha256_hex(bytes);
-    if let Some(expected) = &pkg.sha256
-        && archive_hash != *expected
-    {
-        return Err(IkkError::HashMismatch {
-            name: name.to_string(),
-            version: version.to_string(),
-            expected: expected.clone(),
-            actual: archive_hash,
-        });
-    }
-
+    let filename = download_url.rsplit('/').next().unwrap_or("download");
     let archive_kind = crate::extract::ArchiveKind::detect(filename);
     let is_archive = matches!(
         archive_kind,
@@ -220,79 +185,94 @@ fn process_downloaded_bytes(
     if is_archive {
         let extracted_dir = crate::extract::extract_dir(bytes, filename, stage_dir)?;
         let binaries = crate::extract::list_binaries(&extracted_dir)?;
-        match binaries.as_slice() {
+        return Ok(match binaries.as_slice() {
             [binary] => {
                 let binary_bytes = std::fs::read(binary)?;
                 let _ = std::fs::remove_dir_all(&extracted_dir);
-                return Ok((
-                    CommitPayload::Binary(binary_bytes),
+                let detected =
+                    binary.file_name().and_then(|n| n.to_str()).unwrap_or(binary_name).to_string();
+                FetchedBinary {
+                    binary_bytes,
                     archive_hash,
-                    download_url.to_string(),
-                    false,
-                ));
+                    source_url: download_url.to_string(),
+                    detected_name: detected,
+                    is_dir: false,
+                }
             }
-            [] => {}
+            [] => {
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+                FetchedBinary {
+                    binary_bytes: vec![],
+                    archive_hash,
+                    source_url: download_url.to_string(),
+                    detected_name: binary_name.to_string(),
+                    is_dir: false,
+                }
+            }
             _ => {
                 tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
-                return Ok((
-                    CommitPayload::Directory(extracted_dir),
+                FetchedBinary {
+                    binary_bytes: vec![],
                     archive_hash,
-                    download_url.to_string(),
-                    true,
-                ));
+                    source_url: extracted_dir.display().to_string(),
+                    detected_name: binary_name.to_string(),
+                    is_dir: true,
+                }
             }
-        }
-        let _ = std::fs::remove_dir_all(&extracted_dir);
+        });
     }
 
     let binary_path = crate::extract::extract(bytes, filename, binary_name, stage_dir)?;
     let binary_bytes = std::fs::read(&binary_path)?;
+    let detected =
+        binary_path.file_name().and_then(|n| n.to_str()).unwrap_or(binary_name).to_string();
     let _ = std::fs::remove_file(&binary_path);
-    Ok((CommitPayload::Binary(binary_bytes), archive_hash, download_url.to_string(), false))
+    Ok(FetchedBinary {
+        binary_bytes,
+        archive_hash,
+        source_url: download_url.to_string(),
+        detected_name: detected,
+        is_dir: false,
+    })
 }
-
-// ── commit ───────────────────────────────────────────────────────────────────
 
 fn commit(
     name: &str,
     version: &str,
-    binary_name: &str,
     pkg: &PackageConfig,
-    source_url: String,
-    archive_hash: String,
-    payload: CommitPayload,
-    is_dir: bool,
+    binary_name: &str,
+    fetched: FetchedBinary,
     store: &Store,
     lock: &mut LockFile,
     bin_dir: &Path,
 ) -> Result<()> {
-    // Insert new version first — if it fails, old version is still intact
-    let store_path = match payload {
-        CommitPayload::Binary(bytes) => store.insert(
-            name,
-            version,
-            pkg.variant.as_deref(),
-            &bytes,
-            &source_url,
-            &archive_hash,
-        )?,
-        CommitPayload::Directory(dir) => store.insert_dir(
+    let store_path = if fetched.is_dir {
+        let dir = PathBuf::from(&fetched.source_url);
+        store.insert_dir(
             name,
             version,
             pkg.variant.as_deref(),
             &dir,
-            &source_url,
-            &archive_hash,
-        )?,
+            &fetched.source_url,
+            &fetched.archive_hash,
+        )?
+    } else {
+        store.insert(
+            name,
+            version,
+            pkg.variant.as_deref(),
+            &fetched.binary_bytes,
+            &fetched.source_url,
+            &fetched.archive_hash,
+        )?
     };
 
-    // Now remove old version and link new one
     if let Some(old) = lock.get(name) {
         let _ = store.remove(name, &old.version, &old.bin_entry);
         remove_bin_link(bin_dir, binary_name)?;
     }
 
-    if is_dir {
+    if fetched.is_dir {
         create_dir_link(&store_path.path, &bin_dir.join(binary_name))?;
     } else {
         create_file_link(&store_path.binary, &bin_dir.join(binary_name))?;
@@ -303,10 +283,10 @@ fn commit(
         LockedPackage {
             version: version.to_string(),
             variant: pkg.variant.clone(),
-            uri: source_url,
-            sha256: archive_hash,
+            uri: fetched.source_url,
+            sha256: fetched.archive_hash,
             bin_entry: store_path.entry_name,
-            is_dir,
+            is_dir: fetched.is_dir,
             installed_at: unix_now(),
         },
     );
@@ -349,39 +329,6 @@ pub fn resolve_uri_template(uri: &str, version: &str, variant: Option<&str>) -> 
         resolved = resolved.replace("{variant}", v);
     }
     Ok(resolved)
-}
-
-// ── version resolution ───────────────────────────────────────────────────────
-
-async fn resolve_version(
-    name: &str,
-    pkg: &PackageConfig,
-    remote: &dyn Remote,
-    security: &SecurityConfig,
-) -> Result<String> {
-    if let Some(v) = &pkg.version
-        && v != "latest"
-    {
-        return Ok(v.clone());
-    }
-    let release = remote.latest().await?;
-    if release.prerelease || release.draft {
-        return Err(IkkError::PrereleaseNotAllowed);
-    }
-    if !security.is_old_enough(release.published_at.as_deref()) {
-        let age_days = release
-            .published_at
-            .as_deref()
-            .and_then(crate::config::days_since_iso8601)
-            .unwrap_or(0);
-        return Err(IkkError::ReleaseTooRecent {
-            name: name.to_string(),
-            version: release.version.clone(),
-            age_days,
-            min_days: security.min_release_age_days,
-        });
-    }
-    Ok(release.version)
 }
 
 // ── link helpers ──────────────────────────────────────────────────────────────

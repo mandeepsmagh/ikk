@@ -27,8 +27,6 @@ fn setup(name: &str) -> (PathBuf, IkkHome, Config, Store, LockFile, Platform) {
     (dir, home, config, store, lock, platform)
 }
 
-// ── pinned version with explicit binary ──────────────────────────────────────
-
 #[tokio::test]
 #[ignore = "requires GitHub API"]
 async fn pinned_with_binary() {
@@ -56,8 +54,7 @@ async fn pinned_with_binary() {
         platform: &platform,
         home: &home,
     };
-
-    ops::install(&req, &*remote, &http, &security, &store, &mut lock).await.unwrap();
+    ops::install(&req, remote, &http, &security, &store, &mut lock).await.unwrap();
 
     let locked = lock.get("ripgrep").unwrap();
     assert_eq!(locked.version, "14.1.1");
@@ -69,15 +66,13 @@ async fn pinned_with_binary() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ── latest version with auto-detect binary ─────────────────────────────────
-
 #[tokio::test]
 #[ignore = "requires GitHub API"]
 async fn latest_with_auto_detect() {
     let (dir, home, config, store, mut lock, platform) = setup("latest");
     let pkg = PackageConfig {
         uri: "BurntSushi/ripgrep".into(),
-        version: None, // latest
+        version: None,
         variant: None,
         build: None,
         binary: Some("rg".into()),
@@ -98,12 +93,11 @@ async fn latest_with_auto_detect() {
         platform: &platform,
         home: &home,
     };
-
-    ops::install(&req, &*remote, &http, &security, &store, &mut lock).await.unwrap();
+    ops::install(&req, remote, &http, &security, &store, &mut lock).await.unwrap();
 
     let locked = lock.get("ripgrep").unwrap();
     assert!(!locked.version.is_empty(), "version should be resolved");
-    assert!(!locked.sha256.is_empty() || locked.sha256.is_empty(), "sha256 may be empty if local");
+    assert!(!locked.sha256.is_empty());
 
     let results = store.verify_all().unwrap();
     assert!(matches!(results[0], ikk_core::store::VerifyResult::Ok(_)));

@@ -60,7 +60,7 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
 
                 ops::install(
                     &req,
-                    &*remote,
+                    remote,
                     &ctx.http,
                     &ctx.config.security,
                     &ctx.store,

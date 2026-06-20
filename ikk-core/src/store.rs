@@ -57,7 +57,8 @@ impl Store {
         variant: Option<&str>,
         binary_hash: &str,
     ) -> String {
-        let hash_prefix = &binary_hash[..12.min(binary_hash.len())];
+        let hash_prefix = &binary_hash[..12];
+        debug_assert!(binary_hash.len() >= 12, "SHA-256 hex is always 64 chars");
         let base = format!("{hash_prefix}-{name}-{version}");
         match variant {
             Some(v) if !v.is_empty() => format!("{base}-{v}"),
@@ -117,6 +118,7 @@ impl Store {
         source_url: &str,
         archive_sha256: &str,
     ) -> Result<StorePath> {
+        debug_assert!(sha256_hex(binary_bytes).len() >= 12, "SHA-256 hex is always 64 chars");
         let binary_hash = sha256_hex(binary_bytes);
         let entry_name = Self::entry_name(name, version, variant, &binary_hash);
         let entry = self.root.join(&entry_name);
@@ -135,20 +137,37 @@ impl Store {
             });
         }
 
-        let bin_dir = entry.join("bin");
-        std::fs::create_dir_all(&bin_dir)?;
+        // Create the entry directory. Use create_dir (not _all) to avoid
+        // silently succeeding if another process raced us — the O_CREAT|O_EXCL
+        // below handles the file-level race, but we should not write meta.toml
+        // over an existing entry.
+        match std::fs::create_dir(&entry) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                tracing::debug!("store hit (race): {}", entry.display());
+                return Ok(StorePath {
+                    hash: binary_hash,
+                    name: name.to_string(),
+                    version: version.to_string(),
+                    variant: variant.map(String::from),
+                    entry_name,
+                    binary: entry.join("bin").join(name),
+                    path: entry,
+                });
+            }
+            Err(e) => return Err(e.into()),
+        }
 
-        let binary_path = bin_dir.join(name);
+        std::fs::create_dir_all(entry.join("bin"))?;
 
-        // O_CREAT|O_EXCL — atomic, never overwrites
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&binary_path)
-            .map_err(|e| IkkError::Store(format!("create {}: {e}", binary_path.display())))?;
-        std::fs::write(&binary_path, binary_bytes)?;
+        // Write binary to temp file, then rename into place.
+        // Prevents zero-byte entries if the process crashes mid-write.
+        let binary_path = entry.join("bin").join(name);
+        let tmp_binary = binary_path.with_extension(format!("bin.{}.tmp", std::process::id()));
+        std::fs::write(&tmp_binary, binary_bytes)?;
+        std::fs::rename(&tmp_binary, &binary_path)?;
 
-        // Metadata
+        // Metadata — same temp+rename pattern
         let meta = StoreMeta {
             name: name.to_string(),
             version: version.to_string(),
@@ -158,12 +177,14 @@ impl Store {
             binary_sha256: binary_hash.clone(),
             installed_at: crate::lock::unix_now(),
         };
+        let meta_path = entry.join("meta.toml");
+        let tmp_meta = meta_path.with_extension(format!("toml.{}.tmp", std::process::id()));
         std::fs::write(
-            entry.join("meta.toml"),
+            &tmp_meta,
             toml::to_string(&meta).map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?,
         )?;
+        std::fs::rename(&tmp_meta, &meta_path)?;
 
-        // Seal — read + execute only
         seal(&binary_path);
 
         tracing::info!(
@@ -335,6 +356,8 @@ pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Compute a deterministic hash of a directory's contents.
+/// Symlinks are hashed by their target, not followed (prevents
+/// non-reproducible hashes across machines).
 fn hash_dir(dir: &Path) -> Result<String> {
     let mut hasher = Sha256::new();
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -346,7 +369,11 @@ fn hash_dir(dir: &Path) -> Result<String> {
 
     for path in &entries {
         hasher.update(path.file_name().unwrap_or_default().to_string_lossy().as_bytes());
-        if path.is_dir() {
+        let meta = path.symlink_metadata().map_err(|e| IkkError::Store(e.to_string()))?;
+        if meta.is_symlink() {
+            let target = std::fs::read_link(path)?;
+            hasher.update(target.to_string_lossy().as_bytes());
+        } else if meta.is_dir() {
             hasher.update(hash_dir(path)?.as_bytes());
         } else {
             let bytes = std::fs::read(path)?;
@@ -393,8 +420,9 @@ fn seal(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        // chmod may fail on WSL2 drvfs — non-fatal
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555));
+        if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555)) {
+            tracing::warn!("failed to seal {}: {e}", _path.display());
+        }
     }
 }
 
@@ -403,7 +431,9 @@ fn unseal(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
+        if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755)) {
+            tracing::warn!("failed to unseal {}: {e}", _path.display());
+        }
     }
 }
 
@@ -412,7 +442,9 @@ fn unseal_dir(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
+        if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755)) {
+            tracing::warn!("failed to unseal {}: {e}", _path.display());
+        }
     }
 }
 
