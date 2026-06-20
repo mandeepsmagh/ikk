@@ -265,6 +265,7 @@ fn extract_dmg_to_dir(bytes: &[u8], _asset_name: &str, out_dir: &Path) -> Result
     Ok(out_dir.to_path_buf())
 }
 
+#[cfg(target_os = "macos")]
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
     for entry in std::fs::read_dir(src).map_err(|e| IkkError::Store(e.to_string()))? {
         let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
