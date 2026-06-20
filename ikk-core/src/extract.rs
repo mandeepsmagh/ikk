@@ -184,7 +184,7 @@ fn pick_best(tmp_dir: &Path, binary_name: &str) -> Result<PathBuf> {
     }
 
     let (found_path, _) = best
-        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in archive")))?;
+        .ok_or_else(|| IkkError::BinaryNotFound(format!("'{binary_name}' not found in archive")))?;
 
     let out_filename = found_path
         .file_name()
@@ -375,7 +375,7 @@ fn extract_dmg(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
 
     let mount = attach_dmg(&dmg_path)?;
     let found = find_binary_in_dir(Path::new(&mount), binary_name)
-        .ok_or_else(|| IkkError::Store(format!("binary '{binary_name}' not found in dmg")))?;
+        .ok_or_else(|| IkkError::BinaryNotFound(format!("'{binary_name}' not found in dmg")))?;
 
     let dst = stage_dir.join(binary_name);
     std::fs::copy(&found, &dst)?;
@@ -438,9 +438,7 @@ fn safe_join(base: &Path, entry_path: &str) -> Result<PathBuf> {
     // Reject any component that is ".."
     for component in path.components() {
         if component == std::path::Component::ParentDir {
-            return Err(IkkError::Store(format!(
-                "rejected path traversal in zip entry: {entry_path}"
-            )));
+            return Err(IkkError::ZipTraversal(entry_path.to_string()));
         }
     }
 

@@ -191,10 +191,8 @@ pub(crate) fn build_local(
 ) -> Result<Vec<u8>> {
     use std::process::Command;
 
-    let commands = build.ok_or_else(|| IkkError::BuildFailed {
-        name: binary_name.to_string(),
-        reason: "local directory source requires a [build] section with shell commands".into(),
-    })?;
+    let commands =
+        build.ok_or_else(|| IkkError::BuildMissingCommands { name: binary_name.to_string() })?;
 
     for cmd in commands {
         let status = if cfg!(windows) {
@@ -204,14 +202,14 @@ pub(crate) fn build_local(
         };
 
         if !status.success() {
-            return Err(IkkError::BuildFailed {
+            return Err(IkkError::BuildStepFailed {
                 name: binary_name.to_string(),
-                reason: format!("command `{cmd}` exited with {status}"),
+                command: cmd.clone(),
+                exit_code: status.code().unwrap_or(-1),
             });
         }
     }
 
-    // Scan for binary in common output locations
     let candidates = [
         dir.join("target").join("release").join(binary_name),
         dir.join("build").join(binary_name),
@@ -224,8 +222,8 @@ pub(crate) fn build_local(
         }
     }
 
-    Err(IkkError::BuildFailed {
+    Err(IkkError::BuildBinaryNotFound {
         name: binary_name.to_string(),
-        reason: format!("binary '{binary_name}' not found after build"),
+        binary: binary_name.to_string(),
     })
 }
