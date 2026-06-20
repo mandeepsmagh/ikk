@@ -387,7 +387,8 @@ fn seal(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555))?;
+        // chmod may fail on WSL2 drvfs — non-fatal
+        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555));
     }
     Ok(())
 }
@@ -396,7 +397,7 @@ fn unseal(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
+        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
     }
     Ok(())
 }
@@ -405,7 +406,7 @@ fn unseal_dir(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
+        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
     }
     Ok(())
 }

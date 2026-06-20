@@ -340,8 +340,17 @@ fn extract_tar_archive<R: std::io::Read>(
 
     find_best_in_dir(&tmp_dir, binary_name, &mut best)?;
 
-    // fallback: if no strong match, pick any file that looks like a binary
-    if best.as_ref().is_none_or(|(_, s)| *s <= 10) {
+    // If the best name-match is a data file (not a binary), fall back to the
+    // most binary-like file in the archive. Fixes neovim archives where
+    // neovim.desktop (name_score=50) beats nvim (name_score=10).
+    let best_is_data = match &best {
+        Some((path, _)) => {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            exe_score(filename) == 0
+        }
+        None => true,
+    };
+    if best_is_data {
         let mut fallback: Option<(PathBuf, u32)> = None;
         find_exe_in_dir(&tmp_dir, &mut fallback)?;
         if let Some((path, s)) = fallback
@@ -400,8 +409,15 @@ fn extract_zip(bytes: &[u8], binary_name: &str, stage_dir: &Path) -> Result<Path
         }
     }
 
-    // fallback: if no strong name match, pick any file that looks like a binary
-    if best.as_ref().is_none_or(|(_, s)| *s <= 10) {
+    // If the best name-match is a data file, fall back to binary detection
+    let best_is_data = match &best {
+        Some((path, _)) => {
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            exe_score(filename) == 0
+        }
+        None => true,
+    };
+    if best_is_data {
         let mut fallback: Option<(PathBuf, u32)> = None;
         find_exe_in_dir(&tmp_dir, &mut fallback)?;
         if let Some((path, s)) = fallback
@@ -563,7 +579,8 @@ fn set_executable(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755))?;
+        // chmod may fail on WSL2 drvfs — non-fatal
+        let _ = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755));
     }
     Ok(())
 }
