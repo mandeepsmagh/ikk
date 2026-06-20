@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn verify_empty_lock_ok() {
-        assert!(LockFile::default().verify().is_ok());
+        assert!(matches!(LockFile::default().verify(), Ok(())));
     }
 
     #[test]
@@ -255,6 +255,6 @@ mod tests {
         let mut lock = LockFile::default();
         lock.insert("x".into(), pkg("1.0", "abc", "https://github.com/x/y"));
         lock.tree_root = Some("deadbeef".into());
-        assert!(lock.verify().is_err());
+        assert!(matches!(lock.verify(), Err(IkkError::HashMismatch { .. })));
     }
 }

@@ -578,7 +578,7 @@ mod tests {
         let dir = temp_dir("autodetect");
 
         let result = extract(&bytes, "nvim-linux.tar.gz", "neovim", &dir);
-        assert!(result.is_ok(), "should auto-detect nvim: {:?}", result.err());
+        assert!(result.is_ok(), "should auto-detect nvim: {result:?}");
         let path = result.unwrap();
         assert_eq!(path.file_name().unwrap(), "nvim");
 

@@ -444,21 +444,22 @@ mod tests {
 
     #[test]
     fn resolve_template_missing_version_error() {
-        assert!(
-            resolve_uri_template("https://example.com/tool-{version}.tar.gz", "", None).is_err()
-        );
+        assert!(matches!(
+            resolve_uri_template("https://example.com/tool-{version}.tar.gz", "", None),
+            Err(IkkError::VersionRequiredForTemplate)
+        ));
     }
 
     #[test]
     fn resolve_template_missing_variant_error() {
-        assert!(
+        assert!(matches!(
             resolve_uri_template(
                 "https://example.com/tool-{version}-{variant}.tar.gz",
                 "1.0",
                 None
-            )
-            .is_err()
-        );
+            ),
+            Err(IkkError::Store(_)) // "URI contains {variant} but no variant specified"
+        ));
     }
 
     #[test]

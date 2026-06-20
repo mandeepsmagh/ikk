@@ -392,7 +392,10 @@ mod tests {
 
     #[test]
     fn classify_shorthand_without_default_remote_fails() {
-        assert!(PackageMode::classify("foo/bar", None, false).is_err());
+        assert!(matches!(
+            PackageMode::classify("foo/bar", None, false),
+            Err(IkkError::NoDefaultRemote)
+        ));
     }
 
     #[test]
@@ -461,7 +464,7 @@ min_release_age_days = 3
         )
         .unwrap();
         let result = Config::load(&tmp);
-        assert!(result.is_err());
+        assert!(matches!(result, Err(IkkError::Toml(_))), "got: {result:?}");
         let err = result.unwrap_err().to_string();
         assert!(err.contains("[securty]"), "error should mention the unknown section: {err}");
         let _ = std::fs::remove_file(&tmp);
