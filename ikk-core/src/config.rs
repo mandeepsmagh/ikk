@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use crate::error::{IkkError, Result};
 use crate::remote::RemoteConfig;
 
-// ── reserved keys that cannot be package names ──────────────────────────────
+// ── known config section keys ────────────────────────────────────────────────
 
-const RESERVED: &[&str] = &["defaults", "security", "auth", "store", "remotes"];
+const KNOWN_SECTIONS: &[&str] = &["defaults", "security", "auth", "store", "remotes"];
 
 // ── top-level config ─────────────────────────────────────────────────────────
 
@@ -15,8 +15,8 @@ const RESERVED: &[&str] = &["defaults", "security", "auth", "store", "remotes"];
 ///
 /// Package entries are top-level keys (e.g. `[ripgrep]`, not `[packages.ripgrep]`).
 /// Known config sections (`defaults`, `security`, `auth`, `store`, `remotes`) are
-/// deserialized explicitly; everything else is captured as a package.
-#[derive(Debug, Serialize, Deserialize, Default)]
+/// deserialized explicitly; everything else is captured as a package entry.
+#[derive(Debug, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub defaults: Defaults,
@@ -34,9 +34,9 @@ pub struct Config {
     #[serde(default)]
     pub remotes: Vec<RemoteConfig>,
 
-    /// Packages keyed by name. Top-level keys in TOML that aren't in the
-    /// reserved set land here via `#[serde(flatten)]`.
-    #[serde(flatten)]
+    /// Packages keyed by name. Any top-level TOML key not in `KNOWN_SECTIONS`
+    /// is treated as a package entry.
+    #[serde(default)]
     pub packages: BTreeMap<String, PackageConfig>,
 }
 
@@ -53,31 +53,27 @@ pub struct Defaults {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageConfig {
-    /// `https://host/owner/repo`, `https://host/.../{version}-{variant}.tar.gz`,
+    /// `https://host/owner/repo`, `https://.../{version}-{variant}.tar.gz`,
     /// `file:///absolute/path`, or shorthand `owner/repo`.
     pub uri: String,
 
-    /// "latest", exact semver like "14.1.1", or absent (required in template mode).
+    /// "latest", exact semver like "14.1.1", or absent.
     #[serde(default)]
     pub version: Option<String>,
 
     /// Variant label — e.g. "cuda12", "cpu".
-    /// Only meaningful when `{variant}` appears in the URI template.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
 
     /// Build command list — only for `file://` directory URIs.
-    /// Each entry is a shell command run in the source directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<Vec<String>>,
 
-    /// Binary name inside archive or build output.
-    /// Auto-detected if not set.
+    /// Binary name inside archive or build output. Auto-detected if not set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
 
     /// Expected SHA-256 of the downloaded archive.
-    /// If set, `ikk` verifies after download and aborts on mismatch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
 }
@@ -87,8 +83,6 @@ pub struct PackageConfig {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SecurityConfig {
     /// Minimum age in days before ikk will install a latest release.
-    /// Protects against supply chain attacks where a release is
-    /// pushed and immediately replaced with a malicious one.
     /// 0 = disabled. Recommended: 3–7.
     #[serde(default)]
     pub min_release_age_days: u64,
@@ -125,24 +119,26 @@ pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
     Some(now_days.saturating_sub(days))
 }
 
+/// Civil date → days since Unix epoch using Howard Hinnant's algorithm.
+/// The i64 → u64 casts are safe for any release date (post-1970).
 fn days_from_civil(mut y: i64, m: u32, d: u32) -> u64 {
-    let mut m = i64::from(m);
+    let mut m = m as i64;
     if m <= 2 {
         y -= 1;
         m += 12;
     }
-    let d = i64::from(d);
+    let d = d as i64;
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u64;
     let doy = (153 * (m as u64 - 3) + 2) / 5 + d as u64 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era as u64 * 146097 + doe - 719468
+    era as u64 * 146_097 + doe - 719_468
 }
 
 fn days_from_civil_utc_now() -> Option<u64> {
     use std::time::SystemTime;
     let dur = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).ok()?;
-    Some(dur.as_secs() / 86400)
+    Some(dur.as_secs() / 86_400)
 }
 
 // ── auth ─────────────────────────────────────────────────────────────────────
@@ -152,10 +148,11 @@ pub struct AuthConfig {
     #[serde(default)]
     pub tokens: BTreeMap<String, TokenConfig>,
 
-    /// SSH key path for git clone of private repos (build from source).
+    /// SSH key path for git clone of private repos.
+    /// Default: `~/.ssh/id_ed25519`. Returns `None` if home dir cannot be determined.
     pub ssh_key: Option<PathBuf>,
 
-    /// SSH key passphrase env var name.
+    /// SSH key passphrase env var name — never stores the passphrase itself.
     pub ssh_passphrase_env: Option<String>,
 }
 
@@ -172,10 +169,11 @@ impl AuthConfig {
     }
 
     #[must_use]
-    pub fn ssh_key_path(&self) -> PathBuf {
-        self.ssh_key
-            .clone()
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".ssh").join("id_ed25519"))
+    pub fn ssh_key_path(&self) -> Option<PathBuf> {
+        if let Some(ref key) = self.ssh_key {
+            return Some(key.clone());
+        }
+        dirs::home_dir().map(|h| h.join(".ssh").join("id_ed25519"))
     }
 }
 
@@ -204,6 +202,7 @@ pub enum PackageMode {
 
 impl PackageMode {
     /// Classify a URI (raw, before shorthand expansion) and optional build field.
+    #[must_use]
     pub fn classify(uri: &str, default_remote: Option<&str>, has_build: bool) -> Result<Self> {
         // Shorthand — no scheme, no leading / or ~/
         if !uri.contains("://") && !uri.starts_with('/') && !uri.starts_with("~/") {
@@ -247,21 +246,39 @@ impl PackageMode {
 // ── impl ──────────────────────────────────────────────────────────────────────
 
 impl Config {
-    /// Load from disk. Returns defaults if file does not exist.
+    /// Load from disk via two-pass deserialization:
+    /// 1. Parse into `toml::Table` to partition known sections from package entries
+    /// 2. Deserialize each section individually for clear error messages.
+    /// Returns defaults if file does not exist.
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
         let s = std::fs::read_to_string(path)?;
-        let config: Config =
-            toml::from_str(&s).map_err(|e| IkkError::Toml(format!("ikk.toml: {e}")))?;
-        config.validate()?;
-        Ok(config)
+        let raw: toml::Table =
+            toml::from_str(&s).map_err(|e| IkkError::Toml(format!("invalid TOML: {e}")))?;
+
+        let defaults = deserialize_section(&raw, "defaults")?;
+        let security = deserialize_section(&raw, "security")?;
+        let auth = deserialize_section(&raw, "auth")?;
+        let store = deserialize_section(&raw, "store")?;
+        let remotes = deserialize_section::<Vec<RemoteConfig>>(&raw, "remotes")?;
+
+        let mut packages = BTreeMap::new();
+        for (key, value) in &raw {
+            if KNOWN_SECTIONS.contains(&key.as_str()) {
+                continue;
+            }
+            let pkg: PackageConfig =
+                value.clone().try_into().map_err(|e| IkkError::Toml(format!("[{key}]: {e}")))?;
+            packages.insert(key.clone(), pkg);
+        }
+
+        Ok(Self { defaults, security, auth, store, remotes, packages })
     }
 
     /// Save to disk (creates parent dirs).
     pub fn save(&self, path: &Path) -> Result<()> {
-        self.validate()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -271,52 +288,50 @@ impl Config {
         Ok(())
     }
 
-    /// Check that no package name collides with a reserved config key.
-    fn validate(&self) -> Result<()> {
-        for name in self.packages.keys() {
-            if RESERVED.contains(&name.as_str()) {
-                return Err(IkkError::Toml(format!(
-                    "'{name}' is a reserved config section name — use a different package name"
-                )));
-            }
-        }
-        Ok(())
-    }
-
     /// Expand shorthand URIs to full URLs.
-    /// `owner/repo` → `https://{default}.remote/owner/repo`
+    /// `owner/repo` → `https://{default_remote}/owner/repo`
     /// `host/owner/repo` → `https://host/owner/repo`
+    ///
+    /// Returns `None` if the URI requires a default remote but none is set
+    /// (caller should handle this before calling).
     #[must_use]
-    pub fn expand_uri(uri: &str, default_remote: Option<&str>) -> String {
+    pub fn expand_uri(uri: &str, default_remote: Option<&str>) -> Option<String> {
         if uri.contains("://") || uri.starts_with('/') || uri.starts_with("~/") {
-            return uri.to_string();
+            return Some(uri.to_string());
         }
-        // Shorthand: owner/repo or host/owner/repo
         let slash_count = uri.matches('/').count();
-        if slash_count >= 1 {
-            if slash_count == 1 {
-                // owner/repo — prepend default remote
-                if let Some(remote) = default_remote {
-                    return format!("https://{remote}/{uri}");
-                }
-            } else {
-                // host/owner/repo — just prefix scheme
-                return format!("https://{uri}");
-            }
+        if slash_count == 1 {
+            // owner/repo — needs default remote
+            default_remote.map(|r| format!("https://{r}/{uri}"))
+        } else if slash_count >= 2 {
+            // host/owner/repo — self-contained
+            Some(format!("https://{uri}"))
+        } else {
+            Some(uri.to_string())
         }
-        uri.to_string()
     }
 
     /// Resolve a package URI to a full `url::Url`, expanding shorthand if needed.
     pub fn resolve_uri(&self, uri: &str) -> Result<url::Url> {
-        let expanded = Self::expand_uri(uri, self.defaults.remote.as_deref());
+        let expanded =
+            Self::expand_uri(uri, self.defaults.remote.as_deref()).unwrap_or_else(|| {
+                // Missing default remote — should have been caught by classify()
+                uri.to_string()
+            });
         url::Url::parse(&expanded).map_err(|e| IkkError::MalformedUri(format!("{expanded}: {e}")))
     }
+}
 
-    /// Get a package config by name.
-    #[must_use]
-    pub fn get_package(&self, name: &str) -> Option<&PackageConfig> {
-        self.packages.get(name)
+/// Deserialize a known section from the TOML table, returning `Default` if absent.
+fn deserialize_section<T: Default + serde::de::DeserializeOwned>(
+    table: &toml::Table,
+    key: &str,
+) -> Result<T> {
+    match table.get(key) {
+        Some(value) => {
+            value.clone().try_into().map_err(|e| IkkError::Toml(format!("[{key}]: {e}")))
+        }
+        None => Ok(T::default()),
     }
 }
 
@@ -326,16 +341,24 @@ mod tests {
 
     #[test]
     fn expand_shorthand() {
-        assert_eq!(Config::expand_uri("foo/bar", Some("github.com")), "https://github.com/foo/bar");
+        assert_eq!(
+            Config::expand_uri("foo/bar", Some("github.com")),
+            Some("https://github.com/foo/bar".into())
+        );
         assert_eq!(
             Config::expand_uri("codeberg.org/helix/helix", None),
-            "https://codeberg.org/helix/helix"
+            Some("https://codeberg.org/helix/helix".into())
         );
         assert_eq!(
             Config::expand_uri("https://example.com/tool.tar.gz", None),
-            "https://example.com/tool.tar.gz"
+            Some("https://example.com/tool.tar.gz".into())
         );
-        assert_eq!(Config::expand_uri("/usr/local/bin/tool", None), "/usr/local/bin/tool");
+        assert_eq!(
+            Config::expand_uri("/usr/local/bin/tool", None),
+            Some("/usr/local/bin/tool".into())
+        );
+        // Missing default remote for bare owner/repo
+        assert_eq!(Config::expand_uri("foo/bar", None), None);
     }
 
     #[test]
@@ -402,6 +425,7 @@ mod tests {
 
     #[test]
     fn deserialize_top_level_packages() {
+        let tmp = std::env::temp_dir().join("ikk_test_deser.toml");
         let toml = r#"
 [defaults]
 remote = "github.com"
@@ -414,35 +438,32 @@ version = "14.1.1"
 uri = "sharkdp/fd"
 binary = "fd"
 "#;
-        let config: Config = toml::from_str(toml).unwrap();
+        std::fs::write(&tmp, toml).unwrap();
+        let config = Config::load(&tmp).unwrap();
         assert_eq!(config.defaults.remote.as_deref(), Some("github.com"));
         assert_eq!(config.packages.len(), 2);
         assert_eq!(config.packages["ripgrep"].uri, "BurntSushi/ripgrep");
         assert_eq!(config.packages["ripgrep"].version.as_deref(), Some("14.1.1"));
         assert_eq!(config.packages["fd"].binary.as_deref(), Some("fd"));
         assert!(config.packages["fd"].version.is_none());
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
-    fn reserved_name_rejected() {
-        let toml = r#"
-[defaults]
-remote = "github.com"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        // Insert a package with reserved name programmatically
-        let mut config = config;
-        config.packages.insert(
-            "defaults".into(),
-            PackageConfig {
-                uri: "foo/bar".into(),
-                version: None,
-                variant: None,
-                build: None,
-                binary: None,
-                sha256: None,
-            },
-        );
-        assert!(config.validate().is_err());
+    fn typo_section_gives_clear_error() {
+        let tmp = std::env::temp_dir().join("ikk_test_typo.toml");
+        std::fs::write(
+            &tmp,
+            r#"
+[securty]
+min_release_age_days = 3
+"#,
+        )
+        .unwrap();
+        let result = Config::load(&tmp);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("[securty]"), "error should mention the unknown section: {err}");
+        let _ = std::fs::remove_file(&tmp);
     }
 }
