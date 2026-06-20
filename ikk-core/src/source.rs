@@ -14,6 +14,9 @@ pub struct FetchedBinary {
     pub binary_bytes: Vec<u8>,
     pub archive_hash: String,
     pub source_url: String,
+    /// The actual binary filename detected in the archive.
+    /// Set during extraction when the archive entry differs from `binary_name`.
+    pub detected_name: String,
 }
 
 // ── source trait ────────────────────────────────────────────────────────────
@@ -109,11 +112,16 @@ impl Source for RemoteSource {
 
         let binary_path = crate::extract::extract(bytes, &asset.name, binary_name, stage_dir)?;
         let binary_bytes = std::fs::read(&binary_path)?;
+        let detected_name = binary_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(binary_name)
+            .to_string();
 
         // clean up stage
         let _ = std::fs::remove_file(&binary_path);
 
-        Ok(FetchedBinary { binary_bytes, archive_hash, source_url: asset.url.clone() })
+        Ok(FetchedBinary { binary_bytes, archive_hash, source_url: asset.url.clone(), detected_name })
     }
 }
 
@@ -154,9 +162,9 @@ impl Source for LocalSource {
 
         let source_url = self.path.display().to_string();
 
-        let (binary_bytes, archive_hash) = if self.is_dir {
+        let (binary_bytes, archive_hash, detected_name) = if self.is_dir {
             let bytes = build_local(&self.path, binary_name, self.build.as_ref())?;
-            (bytes, String::new())
+            (bytes, String::new(), binary_name.to_string())
         } else {
             let bytes = std::fs::read(&self.path)?;
             let archive_hash = sha256_hex(&bytes);
@@ -166,10 +174,15 @@ impl Source for LocalSource {
                 binary_name,
                 stage_dir,
             )?;
-            (std::fs::read(&binary_path)?, archive_hash)
+            let detected = binary_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(binary_name)
+                .to_string();
+            (std::fs::read(&binary_path)?, archive_hash, detected)
         };
 
-        Ok(FetchedBinary { binary_bytes, archive_hash, source_url })
+        Ok(FetchedBinary { binary_bytes, archive_hash, source_url, detected_name })
     }
 }
 
