@@ -7,6 +7,22 @@ use crate::remote::RemoteConfig;
 
 const KNOWN_SECTIONS: &[&str] = &["defaults", "security", "auth", "store", "remotes"];
 
+// ── package mode ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageMode {
+    /// Package discovered from a remote forge.
+    Remote,
+
+    /// Package downloaded from a URI containing version/variant templates.
+    Template,
+
+    /// Package loaded from the local filesystem.
+    Local,
+}
+
+// ── config ──────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
@@ -130,6 +146,37 @@ fn days_from_civil_utc_now() -> Option<u64> {
     Some(duration.as_secs() / 86_400)
 }
 
+// ── package classification ──────────────────────────────────────────────────
+
+impl Config {
+    /// Determine how a package should be fetched.
+    ///
+    /// Classification is based on the expanded URI rather than the raw URI,
+    /// so shorthand such as `owner/repo` is correctly treated as remote.
+    #[must_use]
+    pub fn package_mode(&self, pkg: &PackageConfig) -> PackageMode {
+        let uri = Self::expand_uri(&pkg.uri, self.defaults.remote.as_deref())
+            .unwrap_or_else(|| pkg.uri.clone());
+
+        if is_local_uri(&uri) {
+            PackageMode::Local
+        } else if uri.contains("{version}") || uri.contains("{variant}") {
+            PackageMode::Template
+        } else {
+            PackageMode::Remote
+        }
+    }
+}
+
+fn is_local_uri(uri: &str) -> bool {
+    uri.starts_with("file://")
+        || uri.starts_with('/')
+        || uri.starts_with("~/")
+        || Path::new(uri).is_absolute()
+}
+
+// ── auth ────────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
     #[serde(default)]
@@ -161,11 +208,15 @@ impl AuthConfig {
     }
 }
 
+// ── store ───────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreConfig {
     /// Optional path to the content-addressed store.
     pub path: Option<PathBuf>,
 }
+
+// ── config loading ──────────────────────────────────────────────────────────
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
@@ -237,6 +288,8 @@ impl Config {
     }
 }
 
+// ── helpers ─────────────────────────────────────────────────────────────────
+
 fn deserialize_section<T: Default + serde::de::DeserializeOwned>(
     table: &toml::Table,
     key: &str,
@@ -248,6 +301,8 @@ fn deserialize_section<T: Default + serde::de::DeserializeOwned>(
         None => Ok(T::default()),
     }
 }
+
+// ── tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -276,6 +331,105 @@ mod tests {
         );
 
         assert_eq!(Config::expand_uri("foo/bar", None), None);
+    }
+
+    #[test]
+    fn package_mode_remote_shorthand() {
+        let config = Config {
+            defaults: Defaults { remote: Some("github.com".into()) },
+            ..Config::default()
+        };
+
+        let pkg = PackageConfig {
+            uri: "foo/bar".into(),
+            version: Some("latest".into()),
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(config.package_mode(&pkg), PackageMode::Remote);
+    }
+
+    #[test]
+    fn package_mode_remote_url() {
+        let config = Config::default();
+
+        let pkg = PackageConfig {
+            uri: "https://github.com/foo/bar".into(),
+            version: Some("latest".into()),
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(config.package_mode(&pkg), PackageMode::Remote);
+    }
+
+    #[test]
+    fn package_mode_template_version() {
+        let config = Config::default();
+
+        let pkg = PackageConfig {
+            uri: "https://example.com/tool-{version}.tar.gz".into(),
+            version: Some("1.2.3".into()),
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(config.package_mode(&pkg), PackageMode::Template);
+    }
+
+    #[test]
+    fn package_mode_template_variant() {
+        let config = Config::default();
+
+        let pkg = PackageConfig {
+            uri: "https://example.com/tool-{variant}.tar.gz".into(),
+            version: Some("1.2.3".into()),
+            variant: Some("cuda12".into()),
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(config.package_mode(&pkg), PackageMode::Template);
+    }
+
+    #[test]
+    fn package_mode_local_file_uri() {
+        let config = Config::default();
+
+        let pkg = PackageConfig {
+            uri: "file:///tmp/mytool".into(),
+            version: None,
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(config.package_mode(&pkg), PackageMode::Local);
+    }
+
+    #[test]
+    fn package_mode_local_absolute_path() {
+        let config = Config::default();
+
+        let pkg = PackageConfig {
+            uri: "/tmp/mytool".into(),
+            version: None,
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(config.package_mode(&pkg), PackageMode::Local);
     }
 
     #[test]

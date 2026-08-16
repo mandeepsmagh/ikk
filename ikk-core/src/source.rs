@@ -9,7 +9,7 @@ use crate::store::sha256_hex;
 
 const LATEST: &str = "latest";
 
-// ── fetched artifact ────────────────────────────────────────────────────────
+// ── fetched artifact ─────────────────────────────────────────────────────────
 
 /// Result of fetching a package source.
 #[derive(Debug)]
@@ -23,30 +23,27 @@ pub struct FetchedBinary {
     pub archive_hash: String,
 
     /// Original source location.
+    ///
+    /// For multi-binary archives this points to the extracted directory.
     pub source_url: String,
 
     /// Binary filename detected from the source.
     pub detected_name: String,
 
     /// True when the source contains multiple binaries.
-    ///
-    /// In this case `source_url` points to the extracted directory.
     pub is_dir: bool,
 }
 
-// ── source ──────────────────────────────────────────────────────────────────
+// ── source trait ─────────────────────────────────────────────────────────────
 
 /// A package source.
 ///
-/// Sources are deliberately small: they resolve a version and fetch an
-/// artifact. How the source discovers, downloads, builds, or extracts it is
-/// an implementation detail.
+/// Sources resolve versions and fetch artifacts. How the source discovers,
+/// downloads, builds, or extracts the artifact is an implementation detail.
 #[async_trait]
 pub trait Source: Send + Sync {
     /// Resolve a version specification such as `latest` or an exact version.
-    ///
-    /// `name` is used for contextual errors such as `ReleaseTooRecent`.
-    async fn version(&self, spec: &str, name: &str) -> Result<String>;
+    async fn version(&self, spec: &str) -> Result<String>;
 
     /// Fetch the requested version.
     async fn fetch(
@@ -58,12 +55,13 @@ pub trait Source: Send + Sync {
     ) -> Result<FetchedBinary>;
 }
 
-// ── remote source ───────────────────────────────────────────────────────────
+// ── remote source ────────────────────────────────────────────────────────────
 
 pub(crate) struct RemoteSource {
     remote: Box<dyn Remote>,
     http: std::sync::Arc<reqwest::Client>,
     security: SecurityConfig,
+    name: String,
 }
 
 impl RemoteSource {
@@ -71,14 +69,15 @@ impl RemoteSource {
         remote: Box<dyn Remote>,
         http: std::sync::Arc<reqwest::Client>,
         security: SecurityConfig,
+        name: impl Into<String>,
     ) -> Self {
-        Self { remote, http, security }
+        Self { remote, http, security, name: name.into() }
     }
 }
 
 #[async_trait]
 impl Source for RemoteSource {
-    async fn version(&self, spec: &str, name: &str) -> Result<String> {
+    async fn version(&self, spec: &str) -> Result<String> {
         if spec != LATEST {
             return Ok(spec.to_string());
         }
@@ -97,7 +96,7 @@ impl Source for RemoteSource {
                 .unwrap_or(0);
 
             return Err(IkkError::ReleaseTooRecent {
-                name: name.to_string(),
+                name: self.name.clone(),
                 version: release.version.clone(),
                 age_days,
                 min_days: self.security.min_release_age_days,
@@ -120,84 +119,60 @@ impl Source for RemoteSource {
         tracing::info!("downloading {}…", asset.name);
 
         let bytes = self.http.get(&asset.url).send().await?.bytes().await?;
-        let archive_hash = sha256_hex(&bytes);
 
-        let archive_kind = crate::extract::ArchiveKind::detect(&asset.name);
-
-        let is_archive = matches!(
-            archive_kind,
-            crate::extract::ArchiveKind::TarGz
-                | crate::extract::ArchiveKind::TarXz
-                | crate::extract::ArchiveKind::Zip
-        );
-
-        if is_archive {
-            let extracted_dir = crate::extract::extract_dir(&bytes, &asset.name, stage_dir)?;
-
-            let binaries = crate::extract::list_binaries(&extracted_dir)?;
-
-            match binaries.as_slice() {
-                [binary] => {
-                    let detected_name = binary
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or(binary_name)
-                        .to_string();
-
-                    let binary_bytes = std::fs::read(binary)?;
-
-                    let _ = std::fs::remove_dir_all(&extracted_dir);
-
-                    return Ok(FetchedBinary {
-                        binary_bytes,
-                        archive_hash,
-                        source_url: asset.url.clone(),
-                        detected_name,
-                        is_dir: false,
-                    });
-                }
-
-                [] => {}
-
-                _ => {
-                    tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
-
-                    return Ok(FetchedBinary {
-                        binary_bytes: Vec::new(),
-                        archive_hash,
-                        source_url: extracted_dir.display().to_string(),
-                        detected_name: binary_name.to_string(),
-                        is_dir: true,
-                    });
-                }
-            }
-
-            let _ = std::fs::remove_dir_all(&extracted_dir);
-        }
-
-        let binary_path = crate::extract::extract(&bytes, &asset.name, binary_name, stage_dir)?;
-
-        let detected_name = binary_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(binary_name)
-            .to_string();
-
-        let binary_bytes = std::fs::read(&binary_path)?;
-
-        let _ = std::fs::remove_file(&binary_path);
-
-        Ok(FetchedBinary {
-            binary_bytes,
-            archive_hash,
-            source_url: asset.url.clone(),
-            detected_name,
-            is_dir: false,
-        })
+        process_downloaded_bytes(binary_name, &bytes, &asset.name, &asset.url, stage_dir)
     }
 }
 
-// ── local source ────────────────────────────────────────────────────────────
+// ── URL source ───────────────────────────────────────────────────────────────
+
+/// Direct HTTP/HTTPS source using `{version}` and `{variant}` substitutions.
+pub(crate) struct UrlSource {
+    http: std::sync::Arc<reqwest::Client>,
+    template: String,
+    variant: Option<String>,
+}
+
+impl UrlSource {
+    pub(crate) fn new(
+        http: std::sync::Arc<reqwest::Client>,
+        template: impl Into<String>,
+        variant: Option<String>,
+    ) -> Self {
+        Self { http, template: template.into(), variant }
+    }
+}
+
+#[async_trait]
+impl Source for UrlSource {
+    async fn version(&self, spec: &str) -> Result<String> {
+        if spec == LATEST {
+            return Err(IkkError::VersionRequiredForTemplate);
+        }
+
+        Ok(spec.to_string())
+    }
+
+    async fn fetch(
+        &self,
+        version: &str,
+        _platform: &Platform,
+        binary_name: &str,
+        stage_dir: &Path,
+    ) -> Result<FetchedBinary> {
+        let url = resolve_uri_template(&self.template, version, self.variant.as_deref())?;
+
+        tracing::info!("downloading {}…", url);
+
+        let bytes = crate::progress::download_bytes(&self.http, &url, binary_name).await?;
+
+        let filename = url.rsplit('/').next().unwrap_or("download");
+
+        process_downloaded_bytes(binary_name, &bytes, filename, &url, stage_dir)
+    }
+}
+
+// ── local source ─────────────────────────────────────────────────────────────
 
 pub(crate) struct LocalSource {
     path: PathBuf,
@@ -213,7 +188,7 @@ impl LocalSource {
 
 #[async_trait]
 impl Source for LocalSource {
-    async fn version(&self, spec: &str, _name: &str) -> Result<String> {
+    async fn version(&self, spec: &str) -> Result<String> {
         if spec != LATEST {
             return Ok(spec.to_string());
         }
@@ -267,7 +242,119 @@ impl Source for LocalSource {
     }
 }
 
-// ── local build ─────────────────────────────────────────────────────────────
+// ── shared download/extraction ───────────────────────────────────────────────
+
+fn process_downloaded_bytes(
+    binary_name: &str,
+    bytes: &[u8],
+    filename: &str,
+    source_url: &str,
+    stage_dir: &Path,
+) -> Result<FetchedBinary> {
+    let archive_hash = sha256_hex(bytes);
+
+    let archive_kind = crate::extract::ArchiveKind::detect(filename);
+
+    let is_archive = matches!(
+        archive_kind,
+        crate::extract::ArchiveKind::TarGz
+            | crate::extract::ArchiveKind::TarXz
+            | crate::extract::ArchiveKind::Zip
+    );
+
+    if is_archive {
+        let extracted_dir = crate::extract::extract_dir(bytes, filename, stage_dir)?;
+
+        let binaries = crate::extract::list_binaries(&extracted_dir)?;
+
+        match binaries.as_slice() {
+            [binary] => {
+                let detected_name = binary
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(binary_name)
+                    .to_string();
+
+                let binary_bytes = std::fs::read(binary)?;
+
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+
+                return Ok(FetchedBinary {
+                    binary_bytes,
+                    archive_hash,
+                    source_url: source_url.to_string(),
+                    detected_name,
+                    is_dir: false,
+                });
+            }
+
+            [] => {
+                let _ = std::fs::remove_dir_all(&extracted_dir);
+            }
+
+            _ => {
+                tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
+
+                return Ok(FetchedBinary {
+                    binary_bytes: Vec::new(),
+                    archive_hash,
+                    source_url: extracted_dir.display().to_string(),
+                    detected_name: binary_name.to_string(),
+                    is_dir: true,
+                });
+            }
+        }
+    }
+
+    let binary_path = crate::extract::extract(bytes, filename, binary_name, stage_dir)?;
+
+    let detected_name =
+        binary_path.file_name().and_then(|name| name.to_str()).unwrap_or(binary_name).to_string();
+
+    let binary_bytes = std::fs::read(&binary_path)?;
+
+    let _ = std::fs::remove_file(&binary_path);
+
+    Ok(FetchedBinary {
+        binary_bytes,
+        archive_hash,
+        source_url: source_url.to_string(),
+        detected_name,
+        is_dir: false,
+    })
+}
+
+// ── URI template ─────────────────────────────────────────────────────────────
+
+pub(crate) fn resolve_uri_template(
+    uri: &str,
+    version: &str,
+    variant: Option<&str>,
+) -> Result<String> {
+    if !uri.contains("{version}") && !uri.contains("{variant}") {
+        return Ok(uri.to_string());
+    }
+
+    if uri.contains("{version}") && version.is_empty() {
+        return Err(IkkError::VersionRequiredForTemplate);
+    }
+
+    let mut resolved = uri.replace("{version}", version);
+
+    if resolved.contains("{variant}") {
+        let variant = variant.ok_or_else(|| {
+            IkkError::Store(
+                "URI contains {variant} but no variant specified — use --variant <id>".into(),
+            )
+        })?;
+
+        resolved = resolved.replace("{variant}", variant);
+    }
+
+    Ok(resolved)
+}
+
+// ── local build ──────────────────────────────────────────────────────────────
 
 pub(crate) fn build_local(
     dir: &Path,
@@ -311,4 +398,58 @@ pub(crate) fn build_local(
         name: binary_name.to_string(),
         binary: binary_name.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_template_basic() {
+        let resolved =
+            resolve_uri_template("https://example.com/tool-{version}-x86_64.tar.gz", "1.2.3", None)
+                .unwrap();
+
+        assert_eq!(resolved, "https://example.com/tool-1.2.3-x86_64.tar.gz");
+    }
+
+    #[test]
+    fn resolve_template_with_variant() {
+        let resolved = resolve_uri_template(
+            "https://example.com/tool-{version}-{variant}.tar.gz",
+            "b5262",
+            Some("cuda12"),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, "https://example.com/tool-b5262-cuda12.tar.gz");
+    }
+
+    #[test]
+    fn resolve_template_missing_version_error() {
+        assert!(matches!(
+            resolve_uri_template("https://example.com/tool-{version}.tar.gz", "", None),
+            Err(IkkError::VersionRequiredForTemplate)
+        ));
+    }
+
+    #[test]
+    fn resolve_template_missing_variant_error() {
+        assert!(matches!(
+            resolve_uri_template(
+                "https://example.com/tool-{version}-{variant}.tar.gz",
+                "1.0",
+                None
+            ),
+            Err(IkkError::Store(_))
+        ));
+    }
+
+    #[test]
+    fn resolve_template_no_tokens_passthrough() {
+        let resolved =
+            resolve_uri_template("https://example.com/tool-1.0.tar.gz", "ignored", None).unwrap();
+
+        assert_eq!(resolved, "https://example.com/tool-1.0.tar.gz");
+    }
 }

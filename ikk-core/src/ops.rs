@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    config::{Config, PackageConfig, SecurityConfig},
+    config::{Config, PackageConfig, PackageMode, SecurityConfig},
     error::{IkkError, Result},
     home::IkkHome,
     lock::{LockFile, LockedPackage, unix_now},
     platform::Platform,
     remote::Remote,
-    source::{FetchedBinary, LocalSource, RemoteSource, Source},
-    store::{Store, sha256_hex},
+    source::{FetchedBinary, LocalSource, RemoteSource, Source, UrlSource},
+    store::Store,
 };
 
 const LATEST: &str = "latest";
@@ -21,7 +21,7 @@ pub struct InstallRequest<'a> {
     pub home: &'a IkkHome,
 }
 
-// ── forge discovery ─────────────────────────────────────────────────────────
+// ── install ──────────────────────────────────────────────────────────────────
 
 pub async fn install(
     req: &InstallRequest<'_>,
@@ -34,9 +34,32 @@ pub async fn install(
     let name = req.name;
     let pkg = req.pkg;
 
-    let source = RemoteSource::new(remote, std::sync::Arc::new(http.clone()), security.clone());
+    let mode = package_mode(pkg)?;
 
-    let version = source.version(pkg.version.as_deref().unwrap_or(LATEST), name).await?;
+    let binary_name = pkg.binary.as_deref().unwrap_or(name);
+
+    let source: Box<dyn Source> = match mode {
+        PackageMode::Remote => Box::new(RemoteSource::new(
+            remote,
+            std::sync::Arc::new(http.clone()),
+            security.clone(),
+            name,
+        )),
+
+        PackageMode::Template => Box::new(UrlSource::new(
+            std::sync::Arc::new(http.clone()),
+            pkg.uri.clone(),
+            pkg.variant.clone(),
+        )),
+
+        PackageMode::Local => {
+            let path = local_path(&pkg.uri)?;
+
+            Box::new(LocalSource::new(path.clone(), path.is_dir(), pkg.build.clone()))
+        }
+    };
+
+    let version = source.version(pkg.version.as_deref().unwrap_or(LATEST)).await?;
 
     if let Some(locked) = lock.get(name)
         && locked.version == version
@@ -46,11 +69,9 @@ pub async fn install(
         return Ok(());
     }
 
-    let binary_name = pkg.binary.as_deref().unwrap_or(name);
-
     let fetched = source.fetch(&version, req.platform, binary_name, &req.home.stage_dir()).await?;
 
-    verify_hash(name, &version, pkg.sha256.as_deref(), &fetched.archive_hash)?;
+    verify_hash(name, &version, pkg.sha256.as_deref(), &fetched)?;
 
     commit(name, &version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir())?;
 
@@ -59,7 +80,60 @@ pub async fn install(
     Ok(())
 }
 
-// ── URL template ─────────────────────────────────────────────────────────────
+// ── package mode ─────────────────────────────────────────────────────────────
+
+fn package_mode(pkg: &PackageConfig) -> Result<PackageMode> {
+    if pkg.uri.starts_with("file://") || pkg.uri.starts_with('/') || pkg.uri.starts_with("~/") {
+        return Ok(PackageMode::Local);
+    }
+
+    if pkg.uri.contains("{version}") || pkg.uri.contains("{variant}") {
+        return Ok(PackageMode::Template);
+    }
+
+    Ok(PackageMode::Remote)
+}
+
+fn local_path(uri: &str) -> Result<PathBuf> {
+    let url = url::Url::parse(uri).map_err(|e| IkkError::MalformedUri(format!("{uri}: {e}")))?;
+
+    url.to_file_path().map_err(|_| IkkError::LocalPathNotFound(uri.to_string()))
+}
+
+// ── hash verification ────────────────────────────────────────────────────────
+
+fn verify_hash(
+    name: &str,
+    version: &str,
+    expected: Option<&str>,
+    fetched: &FetchedBinary,
+) -> Result<()> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+
+    // Local source directories/builds do not represent a downloaded archive.
+    // There is therefore no archive hash to verify.
+    if fetched.archive_hash.is_empty() {
+        return Ok(());
+    }
+
+    if fetched.archive_hash != expected {
+        return Err(IkkError::HashMismatch {
+            name: name.to_string(),
+            version: version.to_string(),
+            expected: expected.to_string(),
+            actual: fetched.archive_hash.clone(),
+        });
+    }
+
+    Ok(())
+}
+
+// ── compatibility wrappers ──────────────────────────────────────────────────
+//
+// These keep the existing public API working while all source handling now
+// goes through the Source abstraction.
 
 pub async fn install_template(
     req: &InstallRequest<'_>,
@@ -70,9 +144,9 @@ pub async fn install_template(
     let name = req.name;
     let pkg = req.pkg;
 
-    let binary_name = pkg.binary.as_deref().unwrap_or(name);
-
     let version = pkg.version.as_deref().ok_or(IkkError::VersionRequiredForTemplate)?;
+
+    let binary_name = pkg.binary.as_deref().unwrap_or(name);
 
     if let Some(locked) = lock.get(name)
         && locked.version == version
@@ -82,61 +156,54 @@ pub async fn install_template(
         return Ok(());
     }
 
-    let download_url = resolve_uri_template(&pkg.uri, version, pkg.variant.as_deref())?;
+    let source =
+        UrlSource::new(std::sync::Arc::new(http.clone()), pkg.uri.clone(), pkg.variant.clone());
 
-    tracing::info!("downloading {}…", download_url);
-
-    let bytes = crate::progress::download_bytes(http, &download_url, binary_name).await?;
-
-    let archive_hash = sha256_hex(&bytes);
-
-    verify_hash(name, version, pkg.sha256.as_deref(), &archive_hash)?;
+    let resolved_version = source.version(version).await?;
 
     let fetched =
-        process_downloaded_bytes(binary_name, &bytes, &download_url, &req.home.stage_dir())?;
+        source.fetch(&resolved_version, req.platform, binary_name, &req.home.stage_dir()).await?;
 
-    commit(name, version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir())?;
+    verify_hash(name, &resolved_version, pkg.sha256.as_deref(), &fetched)?;
 
-    tracing::info!("installed {}@{}", name, version);
+    commit(name, &resolved_version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir())?;
+
+    tracing::info!("installed {}@{}", name, resolved_version);
 
     Ok(())
 }
 
-// ── local ────────────────────────────────────────────────────────────────────
+// ── local compatibility wrapper ──────────────────────────────────────────────
 
-pub async fn install_local(
-    req: &InstallRequest<'_>,
-    store: &Store,
-    lock: &mut LockFile,
-) -> Result<()> {
+pub fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFile) -> Result<()> {
     let name = req.name;
     let pkg = req.pkg;
 
     let binary_name = pkg.binary.as_deref().unwrap_or(name);
 
-    let url = url::Url::parse(&pkg.uri).map_err(|e| IkkError::MalformedUri(format!("{e}")))?;
+    let path = local_path(&pkg.uri)?;
 
-    let path = url.to_file_path().map_err(|_| IkkError::LocalPathNotFound(pkg.uri.clone()))?;
+    let source = LocalSource::new(path.clone(), path.is_dir(), pkg.build.clone());
 
-    if !path.exists() {
-        return Err(IkkError::LocalPathNotFound(path.display().to_string()));
-    }
-
-    let source = LocalSource::new(path, req.pkg.build.is_some(), pkg.build.clone());
-
-    let version = source.version(LATEST, name).await?;
+    // LocalSource resolves latest to "local".
+    let version = futures::executor::block_on(source.version(LATEST))?;
 
     if let Some(locked) = lock.get(name)
         && locked.version == version
         && locked.variant == pkg.variant
     {
-        tracing::debug!("{name} already installed locally");
+        tracing::debug!("{name} already at {version}");
         return Ok(());
     }
 
-    let fetched = source.fetch(&version, req.platform, binary_name, &req.home.stage_dir()).await?;
+    let fetched = futures::executor::block_on(source.fetch(
+        &version,
+        req.platform,
+        binary_name,
+        &req.home.stage_dir(),
+    ))?;
 
-    verify_hash(name, &version, pkg.sha256.as_deref(), &fetched.archive_hash)?;
+    verify_hash(name, &version, pkg.sha256.as_deref(), &fetched)?;
 
     commit(name, &version, pkg, binary_name, fetched, store, lock, &req.home.bin_dir())?;
 
@@ -145,111 +212,7 @@ pub async fn install_local(
     Ok(())
 }
 
-// ── shared ───────────────────────────────────────────────────────────────────
-
-fn verify_hash(name: &str, version: &str, expected: Option<&str>, actual: &str) -> Result<()> {
-    if let Some(expected) = expected
-        && actual != expected
-    {
-        return Err(IkkError::HashMismatch {
-            name: name.to_string(),
-            version: version.to_string(),
-            expected: expected.to_string(),
-            actual: actual.to_string(),
-        });
-    }
-
-    Ok(())
-}
-
-fn process_downloaded_bytes(
-    binary_name: &str,
-    bytes: &[u8],
-    download_url: &str,
-    stage_dir: &Path,
-) -> Result<FetchedBinary> {
-    let archive_hash = sha256_hex(bytes);
-
-    let filename = download_url.rsplit('/').next().unwrap_or("download");
-
-    let archive_kind = crate::extract::ArchiveKind::detect(filename);
-
-    let is_archive = matches!(
-        archive_kind,
-        crate::extract::ArchiveKind::TarGz
-            | crate::extract::ArchiveKind::TarXz
-            | crate::extract::ArchiveKind::Zip
-    );
-
-    if is_archive {
-        let extracted_dir = crate::extract::extract_dir(bytes, filename, stage_dir)?;
-
-        let binaries = crate::extract::list_binaries(&extracted_dir)?;
-
-        return Ok(match binaries.as_slice() {
-            [binary] => {
-                let binary_bytes = std::fs::read(binary)?;
-
-                let detected = binary
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(binary_name)
-                    .to_string();
-
-                let _ = std::fs::remove_dir_all(&extracted_dir);
-
-                FetchedBinary {
-                    binary_bytes,
-                    archive_hash,
-                    source_url: download_url.to_string(),
-                    detected_name: detected,
-                    is_dir: false,
-                }
-            }
-
-            [] => {
-                let _ = std::fs::remove_dir_all(&extracted_dir);
-
-                FetchedBinary {
-                    binary_bytes: Vec::new(),
-                    archive_hash,
-                    source_url: download_url.to_string(),
-                    detected_name: binary_name.to_string(),
-                    is_dir: false,
-                }
-            }
-
-            _ => {
-                tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
-
-                FetchedBinary {
-                    binary_bytes: Vec::new(),
-                    archive_hash,
-                    source_url: extracted_dir.display().to_string(),
-                    detected_name: binary_name.to_string(),
-                    is_dir: true,
-                }
-            }
-        });
-    }
-
-    let binary_path = crate::extract::extract(bytes, filename, binary_name, stage_dir)?;
-
-    let binary_bytes = std::fs::read(&binary_path)?;
-
-    let detected =
-        binary_path.file_name().and_then(|name| name.to_str()).unwrap_or(binary_name).to_string();
-
-    let _ = std::fs::remove_file(&binary_path);
-
-    Ok(FetchedBinary {
-        binary_bytes,
-        archive_hash,
-        source_url: download_url.to_string(),
-        detected_name: detected,
-        is_dir: false,
-    })
-}
+// ── commit ───────────────────────────────────────────────────────────────────
 
 #[expect(clippy::too_many_arguments)]
 fn commit(
@@ -333,32 +296,6 @@ pub fn remove(
     Ok(())
 }
 
-// ── URI template ─────────────────────────────────────────────────────────────
-
-pub fn resolve_uri_template(uri: &str, version: &str, variant: Option<&str>) -> Result<String> {
-    if !uri.contains("{version}") && !uri.contains("{variant}") {
-        return Ok(uri.to_string());
-    }
-
-    if uri.contains("{version}") && version.is_empty() {
-        return Err(IkkError::VersionRequiredForTemplate);
-    }
-
-    let mut resolved = uri.replace("{version}", version);
-
-    if resolved.contains("{variant}") {
-        let v = variant.ok_or_else(|| {
-            IkkError::Store(
-                "URI contains {variant} but no variant specified — use --variant <id>".into(),
-            )
-        })?;
-
-        resolved = resolved.replace("{variant}", v);
-    }
-
-    Ok(resolved)
-}
-
 // ── link helpers ─────────────────────────────────────────────────────────────
 
 fn create_file_link(src: &Path, dst: &Path) -> Result<()> {
@@ -375,7 +312,8 @@ fn create_file_link(src: &Path, dst: &Path) -> Result<()> {
     {
         if std::os::windows::fs::symlink_file(src, dst).is_err() {
             tracing::warn!(
-                "Developer Mode not enabled; copied binary instead of symlinking — upgrades will require reinstall"
+                "Developer Mode not enabled; copied binary instead of symlinking — \
+                 upgrades will require reinstall"
             );
 
             std::fs::copy(src, dst)?;
@@ -413,7 +351,7 @@ fn create_dir_link(src: &Path, dst: &Path) -> Result<()> {
                 .output();
 
             match output {
-                Ok(o) if o.status.success() => {}
+                Ok(output) if output.status.success() => {}
 
                 _ => {
                     crate::store::copy_dir(src, dst)?;
@@ -461,26 +399,63 @@ pub fn self_uninstall(home: &IkkHome) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ikk_test_{}_{}", name, std::process::id()));
+    #[test]
+    fn package_mode_remote() {
+        let pkg = PackageConfig {
+            uri: "BurntSushi/ripgrep".into(),
+            version: Some("14.1.1".into()),
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        };
 
-        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(package_mode(&pkg).unwrap(), PackageMode::Remote);
+    }
 
-        dir
+    #[test]
+    fn package_mode_template() {
+        let pkg = PackageConfig {
+            uri: "https://example.com/tool-{version}-{variant}.tar.gz".into(),
+            version: Some("1.2.3".into()),
+            variant: Some("cuda12".into()),
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(package_mode(&pkg).unwrap(), PackageMode::Template);
+    }
+
+    #[test]
+    fn package_mode_local_file() {
+        let pkg = PackageConfig {
+            uri: "file:///tmp/mytool".into(),
+            version: None,
+            variant: None,
+            build: None,
+            binary: None,
+            sha256: None,
+        };
+
+        assert_eq!(package_mode(&pkg).unwrap(), PackageMode::Local);
     }
 
     #[test]
     fn resolve_template_basic() {
-        let resolved =
-            resolve_uri_template("https://example.com/tool-{version}-x86_64.tar.gz", "1.2.3", None)
-                .unwrap();
+        let resolved = crate::source::resolve_uri_template(
+            "https://example.com/tool-{version}-x86_64.tar.gz",
+            "1.2.3",
+            None,
+        )
+        .unwrap();
 
         assert_eq!(resolved, "https://example.com/tool-1.2.3-x86_64.tar.gz");
     }
 
     #[test]
     fn resolve_template_with_variant() {
-        let resolved = resolve_uri_template(
+        let resolved = crate::source::resolve_uri_template(
             "https://example.com/tool-{version}-{variant}.tar.gz",
             "b5262",
             Some("cuda12"),
@@ -493,7 +468,11 @@ mod tests {
     #[test]
     fn resolve_template_missing_version_error() {
         assert!(matches!(
-            resolve_uri_template("https://example.com/tool-{version}.tar.gz", "", None),
+            crate::source::resolve_uri_template(
+                "https://example.com/tool-{version}.tar.gz",
+                "",
+                None
+            ),
             Err(IkkError::VersionRequiredForTemplate)
         ));
     }
@@ -501,7 +480,7 @@ mod tests {
     #[test]
     fn resolve_template_missing_variant_error() {
         assert!(matches!(
-            resolve_uri_template(
+            crate::source::resolve_uri_template(
                 "https://example.com/tool-{version}-{variant}.tar.gz",
                 "1.0",
                 None
@@ -512,10 +491,22 @@ mod tests {
 
     #[test]
     fn resolve_template_no_tokens_passthrough() {
-        let resolved =
-            resolve_uri_template("https://example.com/tool-1.0.tar.gz", "ignored", None).unwrap();
+        let resolved = crate::source::resolve_uri_template(
+            "https://example.com/tool-1.0.tar.gz",
+            "ignored",
+            None,
+        )
+        .unwrap();
 
         assert_eq!(resolved, "https://example.com/tool-1.0.tar.gz");
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ikk_test_{}_{}", name, std::process::id()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        dir
     }
 
     #[test]
@@ -559,7 +550,7 @@ mod tests {
             home: &home,
         };
 
-        futures::executor::block_on(install_local(&req, &store, &mut lock)).unwrap();
+        install_local(&req, &store, &mut lock).unwrap();
 
         let locked = lock.get("mytool").unwrap();
 
@@ -581,6 +572,7 @@ mod tests {
         let mut lock = LockFile::default();
 
         let src_dir = dir.join("src");
+
         std::fs::create_dir_all(&src_dir).unwrap();
 
         let pkg = PackageConfig {
@@ -606,7 +598,7 @@ mod tests {
             home: &home,
         };
 
-        futures::executor::block_on(install_local(&req, &store, &mut lock)).unwrap();
+        install_local(&req, &store, &mut lock).unwrap();
 
         let locked = lock.get("mytool").unwrap();
 
@@ -628,6 +620,7 @@ mod tests {
         let mut lock = LockFile::default();
 
         let src_dir = dir.join("src");
+
         std::fs::create_dir_all(&src_dir).unwrap();
 
         let pkg = PackageConfig {
@@ -650,7 +643,7 @@ mod tests {
             home: &home,
         };
 
-        assert!(futures::executor::block_on(install_local(&req, &store, &mut lock)).is_err());
+        assert!(install_local(&req, &store, &mut lock,).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -696,7 +689,7 @@ mod tests {
             home: &home,
         };
 
-        futures::executor::block_on(install_local(&req, &store, &mut lock)).unwrap();
+        install_local(&req, &store, &mut lock).unwrap();
 
         assert_eq!(lock.get("mytool").unwrap().variant.as_deref(), Some("cuda12"));
 
