@@ -9,8 +9,8 @@ use crate::error::{IkkError, Result};
 pub struct LockFile {
     /// Integrity digest over all package entries — detects tampering.
     /// A sorted hash list (degenerate single-level Merkle tree): each leaf
-    /// is sha256(name + version + uri + sha256 + bin_entry + variant), the
-    /// root is sha256(sorted leaves).
+    /// is sha256(name + version + uri + sha256 + bin_entry + binary + variant),
+    /// the root is sha256(sorted leaves).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree_root: Option<String>,
 
@@ -37,6 +37,16 @@ pub struct LockedPackage {
     /// Content-addressed store entry name — `{hash12}-{name}-{version}`.
     pub bin_entry: String,
 
+    /// Name exposed in the user's bin directory.
+    ///
+    /// This is separate from `bin_entry`: `bin_entry` identifies the store
+    /// entry, while `binary` identifies the executable/link created for the
+    /// user.
+    ///
+    /// Default keeps older lock files backwards-compatible.
+    #[serde(default)]
+    pub binary: String,
+
     /// True if this package is a directory (multi-binary).
     #[serde(default)]
     pub is_dir: bool,
@@ -51,10 +61,14 @@ impl LockFile {
         if !path.exists() {
             return Ok(Self::default());
         }
+
         let s = std::fs::read_to_string(path)?;
+
         let lock: LockFile =
             toml::from_str(&s).map_err(|e| IkkError::Toml(format!("ikk.lock: {e}")))?;
+
         lock.verify()?;
+
         Ok(lock)
     }
 
@@ -62,6 +76,7 @@ impl LockFile {
     pub fn verify(&self) -> Result<()> {
         if let Some(stored) = &self.tree_root {
             let computed = self.compute_root();
+
             if computed != *stored {
                 return Err(IkkError::HashMismatch {
                     name: "ikk.lock".into(),
@@ -71,6 +86,7 @@ impl LockFile {
                 });
             }
         }
+
         Ok(())
     }
 
@@ -79,16 +95,19 @@ impl LockFile {
     pub fn save(&self, path: &Path) -> Result<()> {
         let root = self.compute_root();
 
-        // Build the serialized form with the root embedded
+        // Build the serialized form with the root embedded.
         let mut lock = self.clone();
         lock.tree_root = Some(root);
+
         let s =
             toml::to_string_pretty(&lock).map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
 
         let pid = std::process::id();
         let tmp = path.with_extension(format!("lock.{pid}.tmp"));
+
         std::fs::write(&tmp, s)?;
         std::fs::rename(&tmp, path)?;
+
         Ok(())
     }
 
@@ -106,7 +125,10 @@ impl LockFile {
     }
 
     /// Integrity digest: sha256 of sorted per-package leaf hashes.
-    /// Each leaf hashes name + version + uri + sha256 + bin_entry + variant.
+    ///
+    /// Each leaf hashes:
+    ///
+    /// name + version + uri + sha256 + bin_entry + binary + variant
     #[must_use]
     pub fn compute_root(&self) -> String {
         let mut leaves: Vec<String> = self
@@ -114,14 +136,18 @@ impl LockFile {
             .iter()
             .map(|(name, pkg)| {
                 let mut h = Sha256::new();
+
                 h.update(name.as_bytes());
                 h.update(pkg.version.as_bytes());
                 h.update(pkg.uri.as_bytes());
                 h.update(pkg.sha256.as_bytes());
                 h.update(pkg.bin_entry.as_bytes());
-                if let Some(v) = &pkg.variant {
-                    h.update(v.as_bytes());
+                h.update(pkg.binary.as_bytes());
+
+                if let Some(variant) = &pkg.variant {
+                    h.update(variant.as_bytes());
                 }
+
                 hex::encode(h.finalize())
             })
             .collect();
@@ -129,9 +155,11 @@ impl LockFile {
         leaves.sort();
 
         let mut root = Sha256::new();
+
         for leaf in &leaves {
             root.update(leaf.as_bytes());
         }
+
         hex::encode(root.finalize())
     }
 
@@ -173,7 +201,7 @@ impl SyncPlan {
     }
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 /// Current Unix timestamp. Logs a warning if the system clock is before 1970.
 #[must_use]
@@ -193,12 +221,14 @@ mod tests {
 
     fn pkg(version: &str, hash: &str, uri: &str) -> LockedPackage {
         let padded = format!("{hash:0>12}");
+
         LockedPackage {
             version: version.into(),
             variant: None,
             uri: uri.into(),
             sha256: hash.into(),
             bin_entry: format!("{}-foo-{}", &padded[..12], version),
+            binary: "foo".into(),
             is_dir: false,
             installed_at: 1_700_000_000,
         }
@@ -207,13 +237,19 @@ mod tests {
     #[test]
     fn integrity_digest_deterministic() {
         let mut lock = LockFile::default();
+
         lock.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/a"));
+
         lock.insert("b".into(), pkg("2.0", "bbb", "https://github.com/foo/b"));
+
         let root1 = lock.compute_root();
 
         let mut lock2 = LockFile::default();
+
         lock2.insert("b".into(), pkg("2.0", "bbb", "https://github.com/foo/b"));
+
         lock2.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/a"));
+
         let root2 = lock2.compute_root();
 
         assert_eq!(root1, root2, "order-independent");
@@ -222,11 +258,15 @@ mod tests {
     #[test]
     fn integrity_digest_changes_on_uri_swap() {
         let mut lock = LockFile::default();
+
         lock.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/bar"));
+
         let root1 = lock.compute_root();
 
         let mut lock2 = LockFile::default();
+
         lock2.insert("a".into(), pkg("1.0", "aaa", "https://evil.com/foo/bar"));
+
         let root2 = lock2.compute_root();
 
         assert_ne!(root1, root2, "uri swap changes digest");
@@ -235,14 +275,38 @@ mod tests {
     #[test]
     fn integrity_digest_changes_on_hash_tamper() {
         let mut lock = LockFile::default();
+
         lock.insert("a".into(), pkg("1.0", "aaa", "https://github.com/foo/bar"));
+
         let root1 = lock.compute_root();
 
         let mut lock2 = LockFile::default();
+
         lock2.insert("a".into(), pkg("1.0", "bbb", "https://github.com/foo/bar"));
+
         let root2 = lock2.compute_root();
 
         assert_ne!(root1, root2, "hash tamper changes digest");
+    }
+
+    #[test]
+    fn integrity_digest_changes_on_binary_name_change() {
+        let mut lock = LockFile::default();
+
+        lock.insert(
+            "ripgrep".into(),
+            pkg("14.1.1", "aaa", "https://github.com/BurntSushi/ripgrep"),
+        );
+
+        let root1 = lock.compute_root();
+
+        let mut lock2 = lock.clone();
+
+        lock2.packages.get_mut("ripgrep").unwrap().binary = "rg".into();
+
+        let root2 = lock2.compute_root();
+
+        assert_ne!(root1, root2, "binary name change changes digest");
     }
 
     #[test]
@@ -253,8 +317,31 @@ mod tests {
     #[test]
     fn verify_bad_root_detected() {
         let mut lock = LockFile::default();
+
         lock.insert("x".into(), pkg("1.0", "abc", "https://github.com/x/y"));
+
         lock.tree_root = Some("deadbeef".into());
+
         assert!(matches!(lock.verify(), Err(IkkError::HashMismatch { .. })));
+    }
+
+    #[test]
+    fn old_lock_without_binary_loads() {
+        let toml = r#"
+[packages.foo]
+version = "1.0"
+uri = "https://example.com/foo"
+sha256 = "abc"
+bin_entry = "abc123-foo-1.0"
+is_dir = false
+installed_at = 1700000000
+"#;
+
+        let lock: LockFile = toml::from_str(toml).unwrap();
+
+        let pkg = lock.get("foo").unwrap();
+
+        assert_eq!(pkg.binary, "");
+        assert_eq!(pkg.version, "1.0");
     }
 }

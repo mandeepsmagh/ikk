@@ -235,6 +235,7 @@ fn commit(
             uri: fetched.source_url,
             sha256: fetched.archive_hash,
             bin_entry: store_path.entry_name,
+            binary: binary_name.to_string(),
             is_dir: fetched.is_dir,
             installed_at: unix_now(),
         },
