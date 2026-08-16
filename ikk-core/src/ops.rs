@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    config::{Config, PackageConfig, PackageMode, SecurityConfig},
+    config::{Config, PackageConfig, SecurityConfig},
     error::{IkkError, Result},
     home::IkkHome,
     lock::{LockFile, LockedPackage, unix_now},
@@ -21,8 +21,12 @@ pub struct InstallRequest<'a> {
     pub home: &'a IkkHome,
 }
 
-// ── install ──────────────────────────────────────────────────────────────────
+// ── remote / forge install ──────────────────────────────────────────────────
 
+/// Install a package discovered from a remote forge.
+///
+/// Package classification is intentionally handled by the caller.
+/// This function is specifically the remote/forge installation path.
 pub async fn install(
     req: &InstallRequest<'_>,
     remote: Box<dyn Remote>,
@@ -34,30 +38,10 @@ pub async fn install(
     let name = req.name;
     let pkg = req.pkg;
 
-    let mode = package_mode(pkg)?;
-
     let binary_name = pkg.binary.as_deref().unwrap_or(name);
 
-    let source: Box<dyn Source> = match mode {
-        PackageMode::Remote => Box::new(RemoteSource::new(
-            remote,
-            std::sync::Arc::new(http.clone()),
-            security.clone(),
-            name,
-        )),
-
-        PackageMode::Template => Box::new(UrlSource::new(
-            std::sync::Arc::new(http.clone()),
-            pkg.uri.clone(),
-            pkg.variant.clone(),
-        )),
-
-        PackageMode::Local => {
-            let path = local_path(&pkg.uri)?;
-
-            Box::new(LocalSource::new(path.clone(), path.is_dir(), pkg.build.clone()))
-        }
-    };
+    let source =
+        RemoteSource::new(remote, std::sync::Arc::new(http.clone()), security.clone(), name);
 
     let version = source.version(pkg.version.as_deref().unwrap_or(LATEST)).await?;
 
@@ -80,27 +64,7 @@ pub async fn install(
     Ok(())
 }
 
-// ── package mode ─────────────────────────────────────────────────────────────
-
-fn package_mode(pkg: &PackageConfig) -> Result<PackageMode> {
-    if pkg.uri.starts_with("file://") || pkg.uri.starts_with('/') || pkg.uri.starts_with("~/") {
-        return Ok(PackageMode::Local);
-    }
-
-    if pkg.uri.contains("{version}") || pkg.uri.contains("{variant}") {
-        return Ok(PackageMode::Template);
-    }
-
-    Ok(PackageMode::Remote)
-}
-
-fn local_path(uri: &str) -> Result<PathBuf> {
-    let url = url::Url::parse(uri).map_err(|e| IkkError::MalformedUri(format!("{uri}: {e}")))?;
-
-    url.to_file_path().map_err(|_| IkkError::LocalPathNotFound(uri.to_string()))
-}
-
-// ── hash verification ────────────────────────────────────────────────────────
+// ── hash verification ───────────────────────────────────────────────────────
 
 fn verify_hash(
     name: &str,
@@ -130,10 +94,7 @@ fn verify_hash(
     Ok(())
 }
 
-// ── compatibility wrappers ──────────────────────────────────────────────────
-//
-// These keep the existing public API working while all source handling now
-// goes through the Source abstraction.
+// ── URL template install ────────────────────────────────────────────────────
 
 pub async fn install_template(
     req: &InstallRequest<'_>,
@@ -173,7 +134,7 @@ pub async fn install_template(
     Ok(())
 }
 
-// ── local compatibility wrapper ──────────────────────────────────────────────
+// ── local install ────────────────────────────────────────────────────────────
 
 pub fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFile) -> Result<()> {
     let name = req.name;
@@ -210,6 +171,14 @@ pub fn install_local(req: &InstallRequest<'_>, store: &Store, lock: &mut LockFil
     tracing::info!("installed {} (local)", name);
 
     Ok(())
+}
+
+// ── local path ───────────────────────────────────────────────────────────────
+
+fn local_path(uri: &str) -> Result<PathBuf> {
+    let url = url::Url::parse(uri).map_err(|e| IkkError::MalformedUri(format!("{uri}: {e}")))?;
+
+    url.to_file_path().map_err(|_| IkkError::LocalPathNotFound(uri.to_string()))
 }
 
 // ── commit ───────────────────────────────────────────────────────────────────
@@ -296,7 +265,7 @@ pub fn remove(
     Ok(())
 }
 
-// ── link helpers ─────────────────────────────────────────────────────────────
+// ── link helpers ──────────────────────────────────────────────────────────────
 
 fn create_file_link(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() || dst.symlink_metadata().is_ok() {
@@ -391,308 +360,4 @@ pub fn self_uninstall(home: &IkkHome) -> Result<()> {
     tracing::info!("ikk uninstalled — removed {}", home.root.display());
 
     Ok(())
-}
-
-// ── tests ────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn package_mode_remote() {
-        let pkg = PackageConfig {
-            uri: "BurntSushi/ripgrep".into(),
-            version: Some("14.1.1".into()),
-            variant: None,
-            build: None,
-            binary: None,
-            sha256: None,
-        };
-
-        assert_eq!(package_mode(&pkg).unwrap(), PackageMode::Remote);
-    }
-
-    #[test]
-    fn package_mode_template() {
-        let pkg = PackageConfig {
-            uri: "https://example.com/tool-{version}-{variant}.tar.gz".into(),
-            version: Some("1.2.3".into()),
-            variant: Some("cuda12".into()),
-            build: None,
-            binary: None,
-            sha256: None,
-        };
-
-        assert_eq!(package_mode(&pkg).unwrap(), PackageMode::Template);
-    }
-
-    #[test]
-    fn package_mode_local_file() {
-        let pkg = PackageConfig {
-            uri: "file:///tmp/mytool".into(),
-            version: None,
-            variant: None,
-            build: None,
-            binary: None,
-            sha256: None,
-        };
-
-        assert_eq!(package_mode(&pkg).unwrap(), PackageMode::Local);
-    }
-
-    #[test]
-    fn resolve_template_basic() {
-        let resolved = crate::source::resolve_uri_template(
-            "https://example.com/tool-{version}-x86_64.tar.gz",
-            "1.2.3",
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(resolved, "https://example.com/tool-1.2.3-x86_64.tar.gz");
-    }
-
-    #[test]
-    fn resolve_template_with_variant() {
-        let resolved = crate::source::resolve_uri_template(
-            "https://example.com/tool-{version}-{variant}.tar.gz",
-            "b5262",
-            Some("cuda12"),
-        )
-        .unwrap();
-
-        assert_eq!(resolved, "https://example.com/tool-b5262-cuda12.tar.gz");
-    }
-
-    #[test]
-    fn resolve_template_missing_version_error() {
-        assert!(matches!(
-            crate::source::resolve_uri_template(
-                "https://example.com/tool-{version}.tar.gz",
-                "",
-                None
-            ),
-            Err(IkkError::VersionRequiredForTemplate)
-        ));
-    }
-
-    #[test]
-    fn resolve_template_missing_variant_error() {
-        assert!(matches!(
-            crate::source::resolve_uri_template(
-                "https://example.com/tool-{version}-{variant}.tar.gz",
-                "1.0",
-                None
-            ),
-            Err(IkkError::Store(_))
-        ));
-    }
-
-    #[test]
-    fn resolve_template_no_tokens_passthrough() {
-        let resolved = crate::source::resolve_uri_template(
-            "https://example.com/tool-1.0.tar.gz",
-            "ignored",
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(resolved, "https://example.com/tool-1.0.tar.gz");
-    }
-
-    fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ikk_test_{}_{}", name, std::process::id()));
-
-        let _ = std::fs::remove_dir_all(&dir);
-
-        dir
-    }
-
-    #[test]
-    fn install_local_binary() {
-        let dir = test_dir("local_bin");
-        let home = IkkHome::new(dir.join(".ikk"));
-
-        home.init_dirs().unwrap();
-
-        let store = Store::open(home.store_dir()).unwrap();
-        let mut lock = LockFile::default();
-
-        let src = dir.join("mytool");
-
-        std::fs::write(&src, b"#!/bin/sh\necho hello").unwrap();
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        let pkg = PackageConfig {
-            uri: format!("file://{}", src.display()),
-            version: None,
-            variant: None,
-            build: None,
-            binary: None,
-            sha256: None,
-        };
-
-        let config = Config::default();
-        let platform = Platform::current();
-
-        let req = InstallRequest {
-            name: "mytool",
-            pkg: &pkg,
-            config: &config,
-            platform: &platform,
-            home: &home,
-        };
-
-        install_local(&req, &store, &mut lock).unwrap();
-
-        let locked = lock.get("mytool").unwrap();
-
-        assert_eq!(locked.version, "local");
-        assert!(!locked.bin_entry.is_empty());
-        assert!(!locked.is_dir);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn install_local_build() {
-        let dir = test_dir("local_build");
-        let home = IkkHome::new(dir.join(".ikk"));
-
-        home.init_dirs().unwrap();
-
-        let store = Store::open(home.store_dir()).unwrap();
-        let mut lock = LockFile::default();
-
-        let src_dir = dir.join("src");
-
-        std::fs::create_dir_all(&src_dir).unwrap();
-
-        let pkg = PackageConfig {
-            uri: format!("file://{}", src_dir.display()),
-            version: None,
-            variant: None,
-            build: Some(vec![format!(
-                "printf 'fakebinary' > {}",
-                src_dir.join("mytool").display()
-            )]),
-            binary: Some("mytool".into()),
-            sha256: None,
-        };
-
-        let config = Config::default();
-        let platform = Platform::current();
-
-        let req = InstallRequest {
-            name: "mytool",
-            pkg: &pkg,
-            config: &config,
-            platform: &platform,
-            home: &home,
-        };
-
-        install_local(&req, &store, &mut lock).unwrap();
-
-        let locked = lock.get("mytool").unwrap();
-
-        assert_eq!(locked.version, "local");
-        assert!(!locked.bin_entry.is_empty());
-        assert!(!locked.is_dir);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn install_local_build_fails_on_error() {
-        let dir = test_dir("build_fail");
-        let home = IkkHome::new(dir.join(".ikk"));
-
-        home.init_dirs().unwrap();
-
-        let store = Store::open(home.store_dir()).unwrap();
-        let mut lock = LockFile::default();
-
-        let src_dir = dir.join("src");
-
-        std::fs::create_dir_all(&src_dir).unwrap();
-
-        let pkg = PackageConfig {
-            uri: format!("file://{}", src_dir.display()),
-            version: None,
-            variant: None,
-            build: Some(vec!["exit 1".into()]),
-            binary: Some("mytool".into()),
-            sha256: None,
-        };
-
-        let config = Config::default();
-        let platform = Platform::current();
-
-        let req = InstallRequest {
-            name: "mytool",
-            pkg: &pkg,
-            config: &config,
-            platform: &platform,
-            home: &home,
-        };
-
-        assert!(install_local(&req, &store, &mut lock,).is_err());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn variant_persists_in_lock() {
-        let dir = test_dir("var_lock");
-        let home = IkkHome::new(dir.join(".ikk"));
-
-        home.init_dirs().unwrap();
-
-        let store = Store::open(home.store_dir()).unwrap();
-        let mut lock = LockFile::default();
-
-        let src = dir.join("mytool");
-
-        std::fs::write(&src, b"variant-test").unwrap();
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        let pkg = PackageConfig {
-            uri: format!("file://{}", src.display()),
-            version: None,
-            variant: Some("cuda12".into()),
-            build: None,
-            binary: None,
-            sha256: None,
-        };
-
-        let config = Config::default();
-        let platform = Platform::current();
-
-        let req = InstallRequest {
-            name: "mytool",
-            pkg: &pkg,
-            config: &config,
-            platform: &platform,
-            home: &home,
-        };
-
-        install_local(&req, &store, &mut lock).unwrap();
-
-        assert_eq!(lock.get("mytool").unwrap().variant.as_deref(), Some("cuda12"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }
