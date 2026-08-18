@@ -314,11 +314,7 @@ mod tests {
     use crate::source::Artifact;
 
     fn artifact(dir: &Path) -> Artifact {
-        Artifact {
-            dir: dir.to_path_buf(),
-            archive_hash: "abc".into(),
-            source_url: "url".into(),
-        }
+        Artifact { dir: dir.to_path_buf(), archive_hash: "abc".into(), source_url: "url".into() }
     }
 
     #[test]
@@ -331,8 +327,7 @@ mod tests {
 
     #[test]
     fn entry_name_no_variant() {
-        let name =
-            Store::entry_name("ripgrep", "14.1.1", None, "abcdef1234567890abcdef1234567890");
+        let name = Store::entry_name("ripgrep", "14.1.1", None, "abcdef1234567890abcdef1234567890");
         assert_eq!(name, "abcdef123456-ripgrep-14.1.1");
     }
 
@@ -345,8 +340,7 @@ mod tests {
 
     #[test]
     fn entry_name_empty_variant_ignored() {
-        let name =
-            Store::entry_name("tool", "1.0", Some(""), "abcdef1234567890abcdef1234567890");
+        let name = Store::entry_name("tool", "1.0", Some(""), "abcdef1234567890abcdef1234567890");
         assert_eq!(name, "abcdef123456-tool-1.0");
     }
 

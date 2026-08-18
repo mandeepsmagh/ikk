@@ -1,6 +1,6 @@
 # HANDOFF — S-Tier Package Management Refactor
 
-**Branch:** `refac/core-arch` · **Last commit:** `3412e49` · **State: WIP — core done, CLI broken**
+**Branch:** `refac/core-arch` · **State: nearly done — 1 CLI runtime bug left**
 
 ## The model (read this first)
 
@@ -22,38 +22,60 @@ fetch → Artifact { dir, archive_hash, source_url }
 - Store integrity is `hash_dir` over the whole entry; `seal()`/`unseal()` are gone.
   Tampering is *detected* by `verify_all()`, not prevented by permissions.
 
-## What's done (ikk-core — compiles, 52/53 unit tests pass)
+## What's done (all verified green)
 
-| File | Change |
-|------|--------|
-| `source.rs` | `Artifact` struct; `Source` trait (`version` + `fetch`); `RemoteSource` (GitHub releases), `UrlSource`, `LocalSource` (with optional `[build]` steps). All fetch paths end in `extract::extract_dir`. |
-| `extract.rs` | `extract_dir` only (tar.gz / zip / raw-dir copy). `unwrap_single_root` descends into a lone top-level dir (e.g. `nvim-linux-x86_64/`). `best_asset` still picks the platform-appropriate release asset. |
-| `store.rs` | Single `insert(name, version, variant, &Artifact)`. Entry name = `{hash12}-{name}-{version}`. `hash_dir` integrity. No seal. |
-| `ops.rs` | One pipeline: `install_from_source` (resolve → fetch → store → link → lock). `install` / `install_template` / `install_local` are thin wrappers choosing the `Source`. `remove(name, ...)` takes **no binary param**. `link_bin` creates the `bin/<name>/` junction with a `cmd /C rmdir /S /Q` fallback for Windows. |
-| `shell.rs` | PATH = `bin/` + each `bin/*/`. |
-| `config.rs` | `PackageConfig` has **no `binary` field**. |
-| `lock.rs` | `LockedPackage` has **no `binary` field**; `is_dir` kept only for old-lock deserialization (always true now). |
-| `error.rs` | `BuildBinaryNotFound` and `BinaryNotFound` removed. |
+- `ikk-core`: unified `Artifact` pipeline (`source.rs`), `extract_dir` only
+  (`extract.rs`), single `store.insert(name, version, variant, &Artifact)` with
+  `hash_dir` integrity and no seal, one `install_from_source` pipeline in `ops.rs`,
+  per-package `bin/<name>/` links, Merkle lockfile. **No `binary` field anywhere.**
+- `ikk-cli`: fully migrated — `--binary` flag removed from `add`, `remove` uses the
+  new 4-arg `ops::remove`, `run` discovers executables inside `bin/<name>/`,
+  `sync`/`upgrade` updated, `init` uses new `shell::write_rc`, `self_update` clean.
+- Integration tests updated (`github_e2e.rs`, `real_world.rs`).
+- **All green:** `cargo test --workspace` (55 core + real_world pass; e2e ignored by
+  design), `cargo clippy --workspace` 0 warnings, `cargo fmt` clean.
+- Bug fixed during smoke testing: stage cleanup in `install_from_source` destroyed
+  local sources nested under `$IKK_HOME`; now guarded with `stage.exists()`.
 
-## What's broken (do these in order)
+## What's left (do these in order)
 
-1. **`ikk-cli` does not compile.** It still uses the old API:
-   - `commands/remove.rs` — looks up `pkg.binary` and calls `ops::remove(name, binary, ...)`. New signature: `ops::remove(name, &home, &store, &mut lock)`.
-   - `commands/run.rs` — branches on `locked.is_dir` / single-binary. Now: run from `bin/<name>/` (find the executable inside, or treat `name` as the binary name inside that dir).
-   - `commands/self_update.rs` — reads/writes `binary` field.
-   - `commands/sync.rs`, `commands/upgrade.rs` — call old `ops::remove` signature.
-   - `commands/add.rs` — has a `--binary` flag; remove it.
-2. **Integration tests** (`ikk-core/tests/github_e2e.rs`, `real_world.rs`) reference
-   removed APIs (`binary` field, single-binary `extract`). Update or delete.
-3. **One flaky Windows test:** `ops::tests::remove_unlinks_and_cleans` fails because
-   Windows briefly locks a junction after creation; `remove_file` gets os error 5.
-   Fix: give `remove()` the same `cmd /C rmdir /S /Q` fallback that `link_bin` has
-   (see `link_bin` in `ops.rs`), or add a short retry.
-4. Run `cargo test` (full) and `cargo clippy --workspace` before committing the CLI.
+1. **CLI runtime bug — local install fails at the bin-link step.**
+   `ikk install mytool --uri <local-dir>` prints `stored mytool@local (<hash>)` then
+   dies with a bare `io::Error` "No such file or directory" (no context). Evidence:
+   - Store entry is created correctly (`store/<hash12>-mytool-local/bin/hello`).
+   - `$IKK_HOME/bin/` does **not** exist afterwards — the link creation in
+     `link_bin()` (`ikk-core/src/ops.rs`) fails before creating anything.
+   - The identical pipeline passes in the unit test
+     `ops::tests::install_local_directory_end_to_end` (source nested under home), so
+     the difference is something specific to the CLI path — suspect how
+     `Ctx::load` (`ikk-cli/src/commands/mod.rs`) resolves store/home paths, or a
+     missing dir in the CLI flow that unit-test `setup()` creates.
+   - **Next step:** add an `eprintln!`/tracing with the link path + error in
+     `link_bin()`, run once:
+     ```
+     T=$(mktemp -d); mkdir -p $T/pkg/bin; printf '#!/bin/sh\necho hi\n' > $T/pkg/bin/hello; chmod +x $T/pkg/bin/hello
+     IKK_HOME=$T/.ikk ./target/debug/ikk install mytool --uri "$T/pkg"
+     ```
+     Or write a minimal repro test that calls `Ctx::load` + `ops::install_local`
+     exactly like `add.rs` does.
+   - Also add context to the error (e.g. map io errors in `link_bin` to a named
+     `IkkError` variant) so future failures are diagnosable.
+
+2. **Known flaky Windows test:** `ops::tests::remove_unlinks_and_cleans` — Windows
+   briefly locks a junction after creation; `remove_file` gets os error 5. Fix: give
+   `remove()` the same `cmd /C rmdir /S /Q` fallback that `link_bin` has, or a short
+   retry. (Not reproducible on macOS.)
+
+3. **Full CLI smoke pass** once #1 is fixed — exercise each command at least once:
+   install (local dir + local archive), run (named + default binary), list, info,
+   check, remove, sync, upgrade, gc, init (PATH block in rc file).
+
+4. When the handoff work is complete, **delete `HANDOFF.md`** — the permanent record
+   is `ikk-core/ROADMAP.md` + git history.
 
 ## Conventions
 
-- Rust 2024, `cargo fmt` (4-space, no mixed), clippy pedantic with the crate-level
-  allows in `lib.rs`.
+- Rust 2024, `cargo fmt` (4-space), clippy pedantic with the crate-level allows in
+  `lib.rs`.
 - Errors: `thiserror` in `error.rs`; `tracing` for logs.
 - Tests use `tempfile::tempdir()`; home layout via `IkkHome::new(path)`.

@@ -40,7 +40,8 @@ pub trait Source: Send + Sync {
     async fn version(&self, spec: &str) -> Result<String>;
 
     /// Fetch the requested version as an `Artifact`.
-    async fn fetch(&self, version: &str, platform: &Platform, stage_dir: &Path) -> Result<Artifact>;
+    async fn fetch(&self, version: &str, platform: &Platform, stage_dir: &Path)
+    -> Result<Artifact>;
 }
 
 // ── remote source ────────────────────────────────────────────────────────────
@@ -94,7 +95,12 @@ impl Source for RemoteSource {
         Ok(release.version)
     }
 
-    async fn fetch(&self, version: &str, platform: &Platform, stage_dir: &Path) -> Result<Artifact> {
+    async fn fetch(
+        &self,
+        version: &str,
+        platform: &Platform,
+        stage_dir: &Path,
+    ) -> Result<Artifact> {
         let assets = self.remote.assets(version).await?;
         let asset = crate::extract::best_asset(&assets, platform)?;
 
@@ -104,11 +110,7 @@ impl Source for RemoteSource {
 
         let dir = crate::extract::extract_dir(&bytes, &asset.name, stage_dir)?;
 
-        Ok(Artifact {
-            dir,
-            archive_hash: sha256_hex(&bytes),
-            source_url: asset.url.clone(),
-        })
+        Ok(Artifact { dir, archive_hash: sha256_hex(&bytes), source_url: asset.url.clone() })
     }
 }
 
@@ -141,7 +143,12 @@ impl Source for UrlSource {
         Ok(spec.to_string())
     }
 
-    async fn fetch(&self, version: &str, _platform: &Platform, stage_dir: &Path) -> Result<Artifact> {
+    async fn fetch(
+        &self,
+        version: &str,
+        _platform: &Platform,
+        stage_dir: &Path,
+    ) -> Result<Artifact> {
         let url = resolve_uri_template(&self.template, version, self.variant.as_deref())?;
 
         tracing::info!("downloading {url}…");
@@ -152,11 +159,7 @@ impl Source for UrlSource {
 
         let dir = crate::extract::extract_dir(&bytes, filename, stage_dir)?;
 
-        Ok(Artifact {
-            dir,
-            archive_hash: sha256_hex(&bytes),
-            source_url: url,
-        })
+        Ok(Artifact { dir, archive_hash: sha256_hex(&bytes), source_url: url })
     }
 }
 
@@ -184,7 +187,12 @@ impl Source for LocalSource {
         Ok("local".into())
     }
 
-    async fn fetch(&self, _version: &str, _platform: &Platform, stage_dir: &Path) -> Result<Artifact> {
+    async fn fetch(
+        &self,
+        _version: &str,
+        _platform: &Platform,
+        stage_dir: &Path,
+    ) -> Result<Artifact> {
         if !self.path.exists() {
             return Err(IkkError::LocalPathNotFound(self.path.display().to_string()));
         }
@@ -194,7 +202,11 @@ impl Source for LocalSource {
         if self.is_dir {
             // Build in place, then the source directory *is* the package root.
             run_build_commands(&self.path, self.build.as_deref())?;
-            return Ok(Artifact { dir: self.path.clone(), archive_hash: String::new(), source_url });
+            return Ok(Artifact {
+                dir: self.path.clone(),
+                archive_hash: String::new(),
+                source_url,
+            });
         }
 
         let bytes = std::fs::read(&self.path)?;

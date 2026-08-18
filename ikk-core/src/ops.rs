@@ -29,12 +29,7 @@ pub async fn install<'a>(
 ) -> Result<()> {
     let http = std::sync::Arc::new(http.clone());
 
-    let source = RemoteSource::new(
-        remote,
-        http,
-        security.clone(),
-        req.name.to_string(),
-    );
+    let source = RemoteSource::new(remote, http, security.clone(), req.name.to_string());
 
     install_from_source(req, &source, store, lock).await
 }
@@ -54,7 +49,11 @@ pub async fn install_template<'a>(
 }
 
 /// Install a package from a local path (directory or archive).
-pub fn install_local<'a>(req: &'a InstallRequest<'a>, store: &Store, lock: &mut LockFile) -> Result<()> {
+pub async fn install_local<'a>(
+    req: &'a InstallRequest<'a>,
+    store: &Store,
+    lock: &mut LockFile,
+) -> Result<()> {
     let path = expand_path(&req.pkg.uri);
 
     let is_dir = path.is_dir();
@@ -62,12 +61,7 @@ pub fn install_local<'a>(req: &'a InstallRequest<'a>, store: &Store, lock: &mut 
 
     let source = LocalSource::new(path, is_dir, build);
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| IkkError::Store(e.to_string()))?;
-
-    runtime.block_on(install_from_source(req, &source, store, lock))
+    install_from_source(req, &source, store, lock).await
 }
 
 /// Shared install pipeline for all source types.
@@ -88,8 +82,13 @@ async fn install_from_source<'a>(
     let version = source.version(version_spec).await?;
 
     // 2. Fetch artifact
+    // Stage dir is cleaned before and after the fetch, but only if it still
+    // exists — a local source nested under the ikk home would otherwise be
+    // destroyed by the cleanup.
     let stage = req.home.stage_dir();
-    let _ = std::fs::remove_dir_all(&stage);
+    if stage.exists() {
+        std::fs::remove_dir_all(&stage)?;
+    }
     std::fs::create_dir_all(&stage)?;
 
     let artifact = source.fetch(&version, req.platform, &stage).await?;
@@ -115,7 +114,9 @@ async fn install_from_source<'a>(
         },
     );
 
-    let _ = std::fs::remove_dir_all(&stage);
+    if stage.exists() {
+        std::fs::remove_dir_all(&stage)?;
+    }
 
     Ok(())
 }
@@ -142,10 +143,8 @@ pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<()> {
 
     // Final sweep: nuke whatever is left (junction or directory) via cmd.
     if link.exists() {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "rmdir", "/S", "/Q"])
-            .arg(&link)
-            .output();
+        let _ =
+            std::process::Command::new("cmd").args(["/C", "rmdir", "/S", "/Q"]).arg(&link).output();
     }
 
     #[cfg(unix)]
@@ -189,30 +188,44 @@ fn create_junction(target: &Path, link: &Path) -> bool {
 }
 
 fn expand_path(uri: &str) -> std::path::PathBuf {
-    let expanded = if let Some(rest) = uri.strip_prefix("~/") {
+    if let Some(rest) = uri.strip_prefix("~/") {
         dirs::home_dir().map(|h| h.join(rest)).unwrap_or_else(|| std::path::PathBuf::from(uri))
     } else if let Some(rest) = uri.strip_prefix("file://") {
         std::path::PathBuf::from(rest)
     } else {
         std::path::PathBuf::from(uri)
-    };
-    expanded
+    }
+}
+
+/// Remove a directory, symlink, or Windows junction.
+///
+/// Windows briefly locks junctions after creation, so a failed removal gets
+/// the `cmd /C rmdir /S /Q` fallback (same as `link_bin`).
+fn remove_dir_or_link(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_symlink() => std::fs::remove_file(path)?,
+        Ok(_) => std::fs::remove_dir_all(path)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+
+    if path.symlink_metadata().is_ok() {
+        #[cfg(windows)]
+        let _ =
+            std::process::Command::new("cmd").args(["/C", "rmdir", "/S", "/Q"]).arg(path).output();
+
+        if path.symlink_metadata().is_ok() {
+            return Err(IkkError::Store(format!("failed to remove {}", path.display())));
+        }
+    }
+
+    Ok(())
 }
 
 /// Remove a package: unlink `bin/<name>/`, remove store entry, remove lock entry.
-pub fn remove(
-    name: &str,
-    home: &IkkHome,
-    store: &Store,
-    lock: &mut LockFile,
-) -> Result<()> {
+pub fn remove(name: &str, home: &IkkHome, store: &Store, lock: &mut LockFile) -> Result<()> {
     // Unlink bin/<name>/
-    let link = home.bin_dir().join(name);
-    match std::fs::symlink_metadata(&link) {
-        Ok(meta) if meta.is_symlink() => std::fs::remove_file(&link)?,
-        Ok(_) => std::fs::remove_dir_all(&link)?,
-        Err(_) => {}
-    }
+    remove_dir_or_link(&home.bin_dir().join(name))?;
 
     // Remove store entry
     if let Some(locked) = lock.get(name) {
@@ -225,14 +238,33 @@ pub fn remove(
     Ok(())
 }
 
+/// Uninstall ikk itself: strip the PATH block from the shell rc, then remove `~/.ikk`.
+pub fn self_uninstall(home: &IkkHome) -> Result<()> {
+    let shell = crate::shell::Shell::detect();
+    if let Some(rc) = shell.rc_file()
+        && let Err(e) =
+            crate::shell::remove_rc(rc.parent().unwrap_or(std::path::Path::new("")), shell.as_str())
+    {
+        tracing::warn!("failed to remove shell integration: {e}");
+    }
+
+    if home.root.exists() {
+        std::fs::remove_dir_all(&home.root)?;
+    }
+
+    tracing::info!("ikk uninstalled — removed {}", home.root.display());
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{Config, PackageConfig};
-    use crate::source::Artifact;
     use crate::home::IkkHome;
     use crate::lock::LockFile;
     use crate::platform::Platform;
+    use crate::source::Artifact;
     use crate::store::Store;
 
     fn setup(name: &str) -> (std::path::PathBuf, IkkHome, Store, LockFile, Platform) {
@@ -275,11 +307,8 @@ mod tests {
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(target.join("mytool"), b"binary").unwrap();
 
-        let artifact = Artifact {
-            dir: target.clone(),
-            archive_hash: "abc".into(),
-            source_url: "url".into(),
-        };
+        let artifact =
+            Artifact { dir: target.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("mytool", "1.0", None, &artifact).unwrap();
         link_bin(&home, "mytool", &sp.root).unwrap();
 
@@ -332,7 +361,8 @@ mod tests {
             home: &home,
         };
 
-        install_local(&req, &store, &mut lock).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(install_local(&req, &store, &mut lock)).unwrap();
 
         // bin/mytool/ → store entry, author layout preserved
         let linked = home.bin_dir().join("mytool");

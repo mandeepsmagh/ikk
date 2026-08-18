@@ -24,7 +24,6 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
         version: Some("latest".into()),
         variant: None,
         build: None,
-        binary: Some(SELF_BINARY.into()),
         sha256: None,
     };
 

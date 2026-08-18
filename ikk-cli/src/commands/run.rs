@@ -8,7 +8,8 @@ use std::process::Command;
 pub struct RunArgs {
     /// Package name
     pub name: String,
-    /// Binary to run inside the package
+    /// Binary to run inside the package (defaults to the package name)
+    #[arg(default_value = "")]
     pub binary: String,
     /// Arguments to pass to the binary
     #[arg(last = true)]
@@ -18,28 +19,24 @@ pub struct RunArgs {
 pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
     let ctx = Ctx::load(home)?;
 
-    let locked = ctx
-        .lock
-        .get(&args.name)
-        .ok_or_else(|| anyhow::anyhow!("'{}' not installed — run 'ikk sync'", args.name))?;
-
-    if !locked.is_dir {
-        anyhow::bail!(
-            "'{}' is a single-binary package — just run '{0}' directly (it's on your PATH)",
-            args.name
-        );
+    if ctx.lock.get(&args.name).is_none() {
+        anyhow::bail!("'{}' not installed — run 'ikk sync'", args.name);
     }
 
-    // Resolve bin/{name}/ → find binary inside
+    // Every package lives at bin/<name>/ with author-native binary names.
     let pkg_dir = home.bin_dir().join(&args.name);
+    if !pkg_dir.exists() {
+        anyhow::bail!("package directory {} not found — run 'ikk sync'", pkg_dir.display());
+    }
 
-    // Search for the binary
-    let binary_path = find_binary(&pkg_dir, &args.binary).ok_or_else(|| {
+    let binary_name = if args.binary.is_empty() { args.name.clone() } else { args.binary.clone() };
+
+    let binary_path = find_binary(&pkg_dir, &binary_name).ok_or_else(|| {
         anyhow::anyhow!(
             "binary '{}' not found in package '{}' — available binaries:\n{}",
-            args.binary,
+            binary_name,
             args.name,
-            list_binaries(&pkg_dir).join("\n  ")
+            list_binaries(&pkg_dir).join("\n")
         )
     })?;
 
@@ -82,11 +79,22 @@ fn list_binaries(dir: &std::path::Path) -> Vec<String> {
             if path.is_dir() {
                 names.extend(list_binaries(&path));
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && ikk_core::extract::exe_score(name) > 0
+                && is_executable(name)
             {
                 names.push(format!("  {name}"));
             }
         }
     }
     names
+}
+
+/// Heuristic: does this filename look like a standalone executable?
+#[cfg(unix)]
+fn is_executable(name: &str) -> bool {
+    !name.contains('.') && !name.starts_with('.')
+}
+
+#[cfg(windows)]
+fn is_executable(name: &str) -> bool {
+    name.ends_with(".exe") || name.ends_with(".bat") || name.ends_with(".cmd")
 }

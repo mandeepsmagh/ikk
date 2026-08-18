@@ -3,7 +3,7 @@ use clap::Args;
 use ikk_core::{
     config::Config,
     home::IkkHome,
-    shell::{Shell, install_path_integration},
+    shell::{Shell, write_rc},
 };
 
 #[derive(Args)]
@@ -64,10 +64,15 @@ pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
 
     if !args.no_shell {
         let shell = args.shell.map_or_else(Shell::detect, Shell::from);
-        if install_path_integration(&shell, &home.bin_dir())? {
-            println!("added {} to PATH in {:?}", home.bin_dir().display(), shell.rc_file());
-        } else {
-            println!("PATH already configured");
+        match shell.rc_file() {
+            Some(rc) => {
+                let dir = rc.parent().unwrap_or(std::path::Path::new("."));
+                write_rc(dir, shell.as_str(), home)?;
+                println!("added {} to PATH in {}", home.bin_dir().display(), rc.display());
+            }
+            None => {
+                eprintln!("unknown shell — add {} to your PATH manually", home.bin_dir().display());
+            }
         }
     }
 

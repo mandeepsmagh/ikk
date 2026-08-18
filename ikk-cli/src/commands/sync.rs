@@ -72,7 +72,7 @@ async fn sync_package(name: &str, pkg: &PackageConfig, ctx: &mut Ctx) -> Result<
         }
 
         PackageMode::Local => {
-            ops::install_local(&req, &ctx.store, &mut ctx.lock)?;
+            ops::install_local(&req, &ctx.store, &mut ctx.lock).await?;
         }
     }
 
@@ -91,16 +91,7 @@ fn remove_stale(ctx: &mut Ctx) -> Result<Vec<String>> {
         .collect();
 
     for name in to_remove {
-        /*
-         * A package that is no longer in config can only reliably use its
-         * package name as the binary name because the configuration containing
-         * a custom `binary` value has already been removed.
-         *
-         * This matches the default behaviour used by ops::install().
-         */
-        let binary_name = name.clone();
-
-        ops::remove(&name, &binary_name, &ctx.home, &ctx.store, &mut ctx.lock)?;
+        ops::remove(&name, &ctx.home, &ctx.store, &mut ctx.lock)?;
 
         removed.push(name);
     }

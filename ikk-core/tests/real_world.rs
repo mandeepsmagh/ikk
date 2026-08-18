@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod real_world_tests {
-    use ikk_core::extract::{count_binaries, extract, extract_dir};
+    use ikk_core::extract::extract_dir;
 
     #[test]
-    fn neovim_macos_binary_detection() {
+    fn neovim_macos_directory_extraction() {
         let tarball = "nvim-macos-arm64.tar.gz";
         if !std::path::Path::new(tarball).exists() {
             eprintln!("skipping — {tarball} not found");
@@ -14,20 +14,11 @@ mod real_world_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Extract full directory
+        // Extract the full package directory; unwrap_single_root descends into
+        // the lone top-level dir so nvim ends up at the root of the entry.
         let extracted = extract_dir(&bytes, "nvim-macos-arm64.tar.gz", &dir).unwrap();
         assert!(extracted.exists());
-
-        // Count binaries (should be 1 — nvim, not the .so parser libs)
-        let count = count_binaries(&extracted).unwrap();
-        assert_eq!(
-            count, 1,
-            "expected 1 binary (nvim), got {count} — .so files should be excluded"
-        );
-
-        // The single binary extraction should work
-        let binary = extract(&bytes, "nvim-macos-arm64.tar.gz", "neovim", &dir).unwrap();
-        assert_eq!(binary.file_name().unwrap(), "nvim");
+        assert!(extracted.join("nvim").exists(), "expected nvim binary at the package root");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

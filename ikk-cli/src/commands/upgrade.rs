@@ -68,7 +68,7 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
             }
 
             PackageMode::Local => {
-                ops::install_local(&req, &ctx.store, &mut ctx.lock)?;
+                ops::install_local(&req, &ctx.store, &mut ctx.lock).await?;
             }
         }
 

@@ -96,11 +96,7 @@ fn unwrap_single_root(dir: PathBuf) -> PathBuf {
         .map(|e| e.path())
         .collect();
 
-    if entries.len() == 1 && entries[0].is_dir() {
-        entries.remove(0)
-    } else {
-        dir
-    }
+    if entries.len() == 1 && entries[0].is_dir() { entries.remove(0) } else { dir }
 }
 
 // ── directory extraction ─────────────────────────────────────────────────────
@@ -166,8 +162,6 @@ impl Drop for CleanupFile {
 
 #[cfg(target_os = "macos")]
 fn attach_dmg(dmg_path: &Path) -> Result<String> {
-    use std::process::Command;
-
     let out = std::process::Command::new("hdiutil")
         .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
         .output()?;
@@ -193,7 +187,7 @@ fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
         let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
         let path = entry.path();
         if path.is_dir() {
-            std::fs::create_dir_all(&dest_dir.join(entry.file_name()))?;
+            std::fs::create_dir_all(dest_dir.join(entry.file_name()))?;
             copy_dir_contents(&path, &dest_dir.join(entry.file_name()))?;
         } else {
             std::fs::copy(&path, dest_dir.join(entry.file_name()))?;

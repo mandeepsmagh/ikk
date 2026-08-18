@@ -24,10 +24,6 @@ pub struct AddArgs {
     #[arg(long)]
     pub variant: Option<String>,
 
-    /// Binary name inside archive or build output (auto-detected if not set)
-    #[arg(long)]
-    pub binary: Option<String>,
-
     /// Expected SHA-256 of the downloaded archive
     #[arg(long)]
     pub sha256: Option<String>,
@@ -45,7 +41,6 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
         version: args.version,
         variant: args.variant,
         build: args.build,
-        binary: args.binary,
         sha256: args.sha256,
     };
 
@@ -73,7 +68,7 @@ pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
         }
 
         ikk_core::config::PackageMode::Local => {
-            ops::install_local(&req, &ctx.store, &mut ctx.lock)?;
+            ops::install_local(&req, &ctx.store, &mut ctx.lock).await?;
         }
     }
 

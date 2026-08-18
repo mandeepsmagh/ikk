@@ -12,14 +12,7 @@ pub struct RemoveArgs {
 pub fn run(args: RemoveArgs, home: &IkkHome) -> Result<()> {
     let mut ctx = Ctx::load(home)?;
 
-    let binary = ctx
-        .config
-        .packages
-        .get(&args.name)
-        .and_then(|p| p.binary.clone())
-        .unwrap_or_else(|| args.name.clone());
-
-    ops::remove(&args.name, &binary, &ctx.home, &ctx.store, &mut ctx.lock)?;
+    ops::remove(&args.name, &ctx.home, &ctx.store, &mut ctx.lock)?;
 
     ctx.config.packages.remove(&args.name);
     ctx.config.save(&home.config_file())?;

@@ -29,14 +29,13 @@ fn setup(name: &str) -> (PathBuf, IkkHome, Config, Store, LockFile, Platform) {
 
 #[tokio::test]
 #[ignore = "requires GitHub API"]
-async fn pinned_with_binary() {
+async fn pinned_version() {
     let (dir, home, config, store, mut lock, platform) = setup("pinned");
     let pkg = PackageConfig {
         uri: "BurntSushi/ripgrep".into(),
         version: Some("14.1.1".into()),
         variant: None,
         build: None,
-        binary: Some("rg".into()),
         sha256: None,
     };
 
@@ -61,6 +60,10 @@ async fn pinned_with_binary() {
     assert!(!locked.sha256.is_empty());
     assert!(!locked.bin_entry.is_empty());
 
+    // bin/ripgrep/ links to the store entry with author-native layout (rg inside)
+    let linked = home.bin_dir().join("ripgrep");
+    assert!(linked.exists());
+
     let results = store.verify_all().unwrap();
     assert!(matches!(results[0], ikk_core::store::VerifyResult::Ok(_)));
     let _ = std::fs::remove_dir_all(&dir);
@@ -68,14 +71,13 @@ async fn pinned_with_binary() {
 
 #[tokio::test]
 #[ignore = "requires GitHub API"]
-async fn latest_with_auto_detect() {
+async fn latest_version() {
     let (dir, home, config, store, mut lock, platform) = setup("latest");
     let pkg = PackageConfig {
         uri: "BurntSushi/ripgrep".into(),
         version: None,
         variant: None,
         build: None,
-        binary: Some("rg".into()),
         sha256: None,
     };
 
