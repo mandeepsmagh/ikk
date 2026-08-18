@@ -2,6 +2,21 @@
 
 This document outlines the strategic architectural shifts required to transform `ikk-core` from a functional utility into a world-class, high-performance, and production-ready package management engine.
 
+## Status (as of `3412e49`, branch `refac/core-arch`)
+
+| Item | State |
+|------|-------|
+| §1.A Remove `binary_name` from core | ✅ core done (no `binary` field in config/lock/ops) · ⏳ CLI still has `--binary` flag |
+| §1.B Unified install pipeline | ✅ `install_from_source` is the single path; wrappers are thin |
+| §1.C Unified storage (`store.insert(artifact)`) | ✅ `insert`/`insert_dir` merged; seal/unseal removed |
+| §1.D Pure fetching | ⚠️ partial — extraction lives in `extract.rs` (called by `Source::fetch`), not a separate processor stage. Accepted for now. |
+| §2 Integrity auditing over sealing | ✅ `hash_dir` + `verify_all`; no permission-based sealing |
+| §3 Flat-dir model, per-package `bin/<name>/` links | ✅ core done (junction/symlink + copy fallback) · ⏳ CLI `run`/`remove` pending |
+| ikk-cli migration | ⏳ **blocked — does not compile** |
+| Integration tests | ⏳ reference removed APIs |
+
+**Next session: start with `HANDOFF.md` at the repo root.**
+
 ---
 
 ## 1. Architectural Simplification (The "Minimalist Engine" Principle)
