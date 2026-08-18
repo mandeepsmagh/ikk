@@ -1,235 +1,137 @@
-use crate::error::Result;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Shell {
-    Zsh,
-    Bash,
-    Fish,
-    Nushell,
-    PowerShell,
-    /// Shell not detected — `$SHELL` is unset or unrecognised.
-    Unknown,
-}
+use crate::home::IkkHome;
 
-impl Shell {
-    #[must_use]
-    pub fn detect() -> Self {
-        #[cfg(windows)]
-        {
-            Shell::PowerShell
+/// Generate the PATH export lines for a shell profile.
+///
+/// Each installed package gets its own `bin/<name>/` directory on PATH, so
+/// binaries keep the names their authors chose and packages can never
+/// collide.
+pub fn path_exports(home: &IkkHome, shell: &str) -> Vec<String> {
+    let bin_dir = home.bin_dir();
+    let bin = bin_dir.display().to_string();
+
+    match shell {
+        "zsh" | "bash" => vec![
+            format!("[ -d {bin} ] && export PATH=\"${{PATH:-}}:{bin}\""),
+            format!("[ -d {bin} ] && for d in {bin}/*/; do [ -d \"$d\" ] && export PATH=\"${{PATH:-}}:$d\"; done"),
+        ],
+        "fish" => vec![
+            format!("[ -d {bin} ]; and for d in {bin}/*/; [ -d $d ]; and set -gx PATH $PATH $d; end"),
+        ],
+        "powershell" | "pwsh" => {
+            let bin = bin_dir.display().to_string();
+            vec![
+                format!(
+                    r#"if (Test-Path '{bin}') {{ $env:PATH = '{bin};' + $env:PATH; Get-ChildItem -Directory '{bin}' | ForEach-Object {{ $env:PATH = $_.FullName + ';' + $env:PATH }} }}"#
+                ),
+            ]
         }
-
-        #[cfg(not(windows))]
-        {
-            let shell_env = std::env::var("SHELL").ok();
-            match shell_env.as_deref().and_then(|s| s.rsplit('/').next()) {
-                Some("zsh") => Shell::Zsh,
-                Some("bash") => Shell::Bash,
-                Some("fish") => Shell::Fish,
-                Some("nu") => Shell::Nushell,
-                Some(_) => Shell::Unknown,
-                None => Shell::Unknown,
-            }
-        }
-    }
-
-    /// All rc files that could contain the ikk PATH entry.
-    /// Returns multiple candidates for Zsh (`.zshrc`, `.zprofile`) and
-    /// macOS Bash (`.bashrc`, `.bash_profile`).
-    #[must_use]
-    fn rc_candidates(&self) -> Vec<PathBuf> {
-        let Some(home) = dirs::home_dir() else {
-            return vec![];
-        };
-
-        match self {
-            Shell::Zsh => vec![home.join(".zshrc"), home.join(".zprofile")],
-            Shell::Bash => {
-                // macOS Terminal.app opens login shells → .bash_profile
-                let profile = home.join(".bash_profile");
-                let bashrc = home.join(".bashrc");
-                if bashrc.exists() || profile.exists() {
-                    vec![bashrc, profile]
-                } else {
-                    vec![bashrc]
-                }
-            }
-            Shell::Fish => vec![
-                dirs::config_dir()
-                    .unwrap_or_else(|| home.join(".config"))
-                    .join("fish")
-                    .join("config.fish"),
-            ],
-            Shell::Nushell => vec![
-                dirs::config_dir()
-                    .unwrap_or_else(|| home.join(".config"))
-                    .join("nushell")
-                    .join("config.nu"),
-            ],
-            Shell::PowerShell => {
-                // PowerShell 7+
-                let ps7 = home
-                    .join("Documents")
-                    .join("PowerShell")
-                    .join("Microsoft.PowerShell_profile.ps1");
-                // Windows PowerShell 5.1
-                let ps5 = home
-                    .join("Documents")
-                    .join("WindowsPowerShell")
-                    .join("Microsoft.PowerShell_profile.ps1");
-                if ps7.exists() || !ps5.exists() { vec![ps7] } else { vec![ps5] }
-            }
-            Shell::Unknown => vec![],
-        }
-    }
-
-    /// The first candidate that exists, or the first candidate if none exist.
-    #[must_use]
-    pub fn rc_file(&self) -> Option<PathBuf> {
-        let candidates = self.rc_candidates();
-        candidates.iter().find(|p| p.exists()).or_else(|| candidates.first()).cloned()
-    }
-
-    #[must_use]
-    pub fn path_export(&self, bin_dir: &Path) -> String {
-        let bin = bin_dir.display();
-        match self {
-            Shell::Zsh | Shell::Bash | Shell::Unknown => {
-                format!(r#"export PATH="{bin}:$PATH""#)
-            }
-            Shell::Fish => {
-                // fish_add_path is idempotent in Fish 3.2+ — the ikk begin/end
-                // block wrapper is for easy removal tracking.
-                format!(r#"fish_add_path "{bin}""#)
-            }
-            Shell::Nushell => {
-                format!(r#"$env.PATH = ($env.PATH | prepend "{bin}")"#)
-            }
-            Shell::PowerShell => {
-                format!(r#"$env:PATH = "{bin};$env:PATH""#)
-            }
-        }
+        _ => vec![],
     }
 }
 
-/// Write PATH export to all relevant shell rc files — idempotent.
-/// Returns true if any file was modified.
-pub fn install_path_integration(shell: &Shell, bin_dir: &Path) -> Result<bool> {
-    let candidates = shell.rc_candidates();
-    if candidates.is_empty() {
-        tracing::warn!("unknown shell — add {} to your PATH manually", bin_dir.display());
-        return Ok(false);
+/// Write a shell rc file to a directory.
+pub fn write_rc(dir: &std::path::Path, shell: &str, home: &IkkHome) -> Result<PathBuf, String> {
+    let (filename, lines) = match shell {
+        "zsh" => (".zshrc".to_string(), path_exports(home, "zsh")),
+        "bash" => (".bashrc".to_string(), path_exports(home, "bash")),
+        "fish" => (".config/fish/config.fish".to_string(), path_exports(home, "fish")),
+        "powershell" | "pwsh" => {
+            let profile = "Microsoft/PowerShell/Profile.ps1".to_string();
+            let lines = path_exports(home, "powershell");
+            (profile, lines)
+        }
+        _ => return Err(format!("unsupported shell: {shell}")),
+    };
+
+    let path = dir.join(&filename);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let mut modified = false;
-    let marker = "# ikk begin";
-    let line = shell.path_export(bin_dir);
-    let block = format!("\n# ikk begin\n{line}\n# ikk end\n");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let marker = "# >>> ikk >>>";
+    let end_marker = "# <<< ikk <<<";
 
-    for rc in &candidates {
-        if let Some(parent) = rc.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let existing = std::fs::read_to_string(rc).unwrap_or_default();
-        if existing.contains(marker) {
-            continue;
-        }
-
-        // Atomic write: temp → rename
-        let tmp = rc.with_extension(format!("rc.{}.tmp", std::process::id()));
-        std::fs::write(&tmp, format!("{existing}{block}"))?;
-        std::fs::rename(&tmp, rc)?;
-        modified = true;
+    if existing.contains(marker) {
+        // Replace existing block
+        let before = existing.split(marker).next().unwrap_or("");
+        let after = existing.split(end_marker).nth(1).unwrap_or("");
+        let content = format!("{before}{marker}\n{}\n{end_marker}{after}", lines.join("\n"));
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    } else {
+        let content = format!("\n{}\n{}\n{}\n", marker, lines.join("\n"), end_marker);
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
     }
 
-    Ok(modified)
-}
-
-/// Remove the ikk PATH block from all relevant shell rc files.
-/// Returns true if any file was modified.
-pub fn remove_path_integration(shell: &Shell) -> Result<bool> {
-    let candidates = shell.rc_candidates();
-    let mut modified = false;
-
-    for rc in &candidates {
-        if !rc.exists() {
-            continue;
-        }
-
-        let content = std::fs::read_to_string(rc)?;
-        if !content.contains("# ikk begin") {
-            continue;
-        }
-
-        let mut result = String::with_capacity(content.len());
-        let mut skip = false;
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed == "# ikk begin" {
-                skip = true;
-            } else if trimmed == "# ikk end" {
-                skip = false;
-            } else if !skip {
-                result.push_str(line);
-                result.push('\n');
-            }
-        }
-
-        // Atomic write
-        let tmp = rc.with_extension(format!("rc.{}.tmp", std::process::id()));
-        std::fs::write(&tmp, &result)?;
-        std::fs::rename(&tmp, rc)?;
-        modified = true;
-    }
-
-    Ok(modified)
+    Ok(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::home::IkkHome;
 
     #[test]
-    fn rc_candidates_zsh() {
-        let candidates = Shell::Zsh.rc_candidates();
-        assert!(candidates.len() >= 2);
-        assert!(candidates[0].ends_with(".zshrc"));
-        assert!(candidates[1].ends_with(".zprofile"));
+    fn zsh_exports_bin_and_subdirs() {
+        let home = IkkHome::new(std::env::temp_dir().join("ikk_test_shell"));
+        let lines = path_exports(&home, "zsh");
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("export PATH"));
+        assert!(lines[0].contains("bin"));
+        assert!(lines[1].contains("for d in"));
     }
 
     #[test]
-    fn unknown_has_no_rc_file() {
-        assert!(Shell::Unknown.rc_file().is_none());
+    fn fish_exports() {
+        let home = IkkHome::new(std::env::temp_dir().join("ikk_test_shell"));
+        let lines = path_exports(&home, "fish");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("set -gx PATH"));
     }
 
     #[test]
-    fn remove_path_block() {
-        let tmp = std::env::temp_dir().join("ikk_test_shell_remove");
-        std::fs::write(
-            &tmp,
-            "existing line\n# ikk begin\nexport PATH=\"/tmp/bin:$PATH\"\n# ikk end\nother line\n",
-        )
-        .unwrap();
+    fn powershell_exports() {
+        let home = IkkHome::new(std::env::temp_dir().join("ikk_test_shell"));
+        let lines = path_exports(&home, "powershell");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("Test-Path"));
+    }
 
-        // Simulate remove by reading and filtering
-        let content = std::fs::read_to_string(&tmp).unwrap();
-        let mut result = String::new();
-        let mut skip = false;
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed == "# ikk begin" {
-                skip = true;
-            } else if trimmed == "# ikk end" {
-                skip = false;
-            } else if !skip {
-                result.push_str(line);
-                result.push('\n');
-            }
-        }
+    #[test]
+    fn write_rc_creates_file() {
+        let dir = std::env::temp_dir().join(format!("ikk_test_shell_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
 
-        assert_eq!(result, "existing line\nother line\n");
-        let _ = std::fs::remove_file(&tmp);
+        let home = IkkHome::new(dir.join(".ikk"));
+        let path = write_rc(&dir, "zsh", &home).unwrap();
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("# >>> ikk >>>"));
+        assert!(content.contains("# <<< ikk <<<"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_rc_idempotent() {
+        let dir = std::env::temp_dir().join(format!("ikk_test_shell2_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let home = IkkHome::new(dir.join(".ikk"));
+        let _ = write_rc(&dir, "zsh", &home).unwrap();
+        let _ = write_rc(&dir, "zsh", &home).unwrap();
+
+        let content = std::fs::read_to_string(dir.join(".zshrc")).unwrap();
+        assert_eq!(
+            content.matches("# >>> ikk >>>").count(),
+            1,
+            "marker should appear exactly once"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

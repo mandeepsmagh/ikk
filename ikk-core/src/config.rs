@@ -67,10 +67,6 @@ pub struct PackageConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<Vec<String>>,
 
-    /// Binary name to install. Automatically detected when omitted.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binary: Option<String>,
-
     /// Expected SHA-256 of the downloaded artifact.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
@@ -345,7 +341,6 @@ mod tests {
             version: Some("latest".into()),
             variant: None,
             build: None,
-            binary: None,
             sha256: None,
         };
 
@@ -361,7 +356,6 @@ mod tests {
             version: Some("latest".into()),
             variant: None,
             build: None,
-            binary: None,
             sha256: None,
         };
 
@@ -377,7 +371,6 @@ mod tests {
             version: Some("1.2.3".into()),
             variant: None,
             build: None,
-            binary: None,
             sha256: None,
         };
 
@@ -393,7 +386,6 @@ mod tests {
             version: Some("1.2.3".into()),
             variant: Some("cuda12".into()),
             build: None,
-            binary: None,
             sha256: None,
         };
 
@@ -409,7 +401,6 @@ mod tests {
             version: None,
             variant: None,
             build: None,
-            binary: None,
             sha256: None,
         };
 
@@ -425,7 +416,6 @@ mod tests {
             version: None,
             variant: None,
             build: None,
-            binary: None,
             sha256: None,
         };
 
@@ -476,7 +466,6 @@ version = "14.1.1"
 
 [fd]
 uri = "sharkdp/fd"
-binary = "fd"
 "#;
 
         std::fs::write(&tmp, contents).unwrap();
@@ -487,7 +476,6 @@ binary = "fd"
         assert_eq!(config.packages.len(), 2);
         assert_eq!(config.packages["ripgrep"].uri, "BurntSushi/ripgrep");
         assert_eq!(config.packages["ripgrep"].version.as_deref(), Some("14.1.1"));
-        assert_eq!(config.packages["fd"].binary.as_deref(), Some("fd"));
         assert!(config.packages["fd"].version.is_none());
 
         let _ = std::fs::remove_file(&tmp);

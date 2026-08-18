@@ -9,7 +9,7 @@ use crate::error::{IkkError, Result};
 pub struct LockFile {
     /// Integrity digest over all package entries — detects tampering.
     /// A sorted hash list (degenerate single-level Merkle tree): each leaf
-    /// is sha256(name + version + uri + sha256 + bin_entry + binary + variant),
+    /// is sha256(name + version + uri + sha256 + bin_entry + variant),
     /// the root is sha256(sorted leaves).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree_root: Option<String>,
@@ -29,30 +29,25 @@ pub struct LockedPackage {
     /// The resolved download URL or local path.
     pub uri: String,
 
-    /// SHA-256 of the archive / tarball.
-    /// Empty for local builds — those entries are intentionally not hashed.
+    /// SHA-256 of the downloaded archive.
+    /// Empty for local directories — there is no archive to hash.
     #[serde(default)]
     pub sha256: String,
 
     /// Content-addressed store entry name — `{hash12}-{name}-{version}`.
     pub bin_entry: String,
 
-    /// Name exposed in the user's bin directory.
-    ///
-    /// This is separate from `bin_entry`: `bin_entry` identifies the store
-    /// entry, while `binary` identifies the executable/link created for the
-    /// user.
-    ///
-    /// Default keeps older lock files backwards-compatible.
-    #[serde(default)]
-    pub binary: String,
-
-    /// True if this package is a directory (multi-binary).
-    #[serde(default)]
+    /// Always true — every package is a directory linked from `bin/<name>/`.
+    /// Kept for backwards compatibility with older lock files.
+    #[serde(default = "default_true")]
     pub is_dir: bool,
 
     /// Unix timestamp of installation.
     pub installed_at: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl LockFile {
@@ -128,7 +123,7 @@ impl LockFile {
     ///
     /// Each leaf hashes:
     ///
-    /// name + version + uri + sha256 + bin_entry + binary + variant
+    /// name + version + uri + sha256 + bin_entry + variant
     #[must_use]
     pub fn compute_root(&self) -> String {
         let mut leaves: Vec<String> = self
@@ -142,7 +137,6 @@ impl LockFile {
                 h.update(pkg.uri.as_bytes());
                 h.update(pkg.sha256.as_bytes());
                 h.update(pkg.bin_entry.as_bytes());
-                h.update(pkg.binary.as_bytes());
 
                 if let Some(variant) = &pkg.variant {
                     h.update(variant.as_bytes());
@@ -228,8 +222,7 @@ mod tests {
             uri: uri.into(),
             sha256: hash.into(),
             bin_entry: format!("{}-foo-{}", &padded[..12], version),
-            binary: "foo".into(),
-            is_dir: false,
+            is_dir: true,
             installed_at: 1_700_000_000,
         }
     }
@@ -280,33 +273,13 @@ mod tests {
 
         let root1 = lock.compute_root();
 
-        let mut lock2 = LockFile::default();
+        let mut lock2 = lock.clone();
 
-        lock2.insert("a".into(), pkg("1.0", "bbb", "https://github.com/foo/bar"));
+        lock2.packages.get_mut("a").unwrap().sha256 = "bbb".into();
 
         let root2 = lock2.compute_root();
 
         assert_ne!(root1, root2, "hash tamper changes digest");
-    }
-
-    #[test]
-    fn integrity_digest_changes_on_binary_name_change() {
-        let mut lock = LockFile::default();
-
-        lock.insert(
-            "ripgrep".into(),
-            pkg("14.1.1", "aaa", "https://github.com/BurntSushi/ripgrep"),
-        );
-
-        let root1 = lock.compute_root();
-
-        let mut lock2 = lock.clone();
-
-        lock2.packages.get_mut("ripgrep").unwrap().binary = "rg".into();
-
-        let root2 = lock2.compute_root();
-
-        assert_ne!(root1, root2, "binary name change changes digest");
     }
 
     #[test]
@@ -326,14 +299,13 @@ mod tests {
     }
 
     #[test]
-    fn old_lock_without_binary_loads() {
+    fn old_lock_without_is_dir_loads() {
         let toml = r#"
 [packages.foo]
 version = "1.0"
 uri = "https://example.com/foo"
 sha256 = "abc"
 bin_entry = "abc123-foo-1.0"
-is_dir = false
 installed_at = 1700000000
 "#;
 
@@ -341,7 +313,7 @@ installed_at = 1700000000
 
         let pkg = lock.get("foo").unwrap();
 
-        assert_eq!(pkg.binary, "");
+        assert!(pkg.is_dir);
         assert_eq!(pkg.version, "1.0");
     }
 }

@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use crate::error::{IkkError, Result};
+use crate::source::Artifact;
 
 pub struct Store {
     root: PathBuf,
@@ -10,7 +11,7 @@ pub struct Store {
 
 #[derive(Debug, Clone)]
 pub struct StorePath {
-    /// Full binary SHA-256.
+    /// Content hash of the package root (full SHA-256 hex).
     pub hash: String,
     /// Package name.
     pub name: String,
@@ -22,8 +23,8 @@ pub struct StorePath {
     pub entry_name: String,
     /// Path to the entry directory.
     pub path: PathBuf,
-    /// Path to the binary inside the entry: `{path}/bin/{name}`.
-    pub binary: PathBuf,
+    /// Package root inside the entry: `{path}/bin`.
+    pub root: PathBuf,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,7 +35,7 @@ pub(crate) struct StoreMeta {
     pub variant: Option<String>,
     pub source_url: String,
     pub archive_sha256: String,
-    pub binary_sha256: String,
+    pub content_sha256: String,
     pub installed_at: u64,
 }
 
@@ -55,10 +56,10 @@ impl Store {
         name: &str,
         version: &str,
         variant: Option<&str>,
-        binary_hash: &str,
+        content_hash: &str,
     ) -> String {
-        let hash_prefix = &binary_hash[..12];
-        debug_assert!(binary_hash.len() >= 12, "SHA-256 hex is always 64 chars");
+        let hash_prefix = &content_hash[..12];
+        debug_assert!(content_hash.len() >= 12, "SHA-256 hex is always 64 chars");
         let base = format!("{hash_prefix}-{name}-{version}");
         match variant {
             Some(v) if !v.is_empty() => format!("{base}-{v}"),
@@ -73,9 +74,9 @@ impl Store {
         name: &str,
         version: &str,
         variant: Option<&str>,
-        binary_hash: &str,
+        content_hash: &str,
     ) -> PathBuf {
-        self.root.join(Self::entry_name(name, version, variant, binary_hash))
+        self.root.join(Self::entry_name(name, version, variant, content_hash))
     }
 
     /// Find all store entries matching a package name.
@@ -93,12 +94,12 @@ impl Store {
                 let meta: StoreMeta =
                     toml::from_str(&std::fs::read_to_string(path.join("meta.toml")).ok()?).ok()?;
                 Some(StorePath {
-                    hash: meta.binary_sha256.clone(),
+                    hash: meta.content_sha256.clone(),
                     name: meta.name.clone(),
                     version: meta.version,
                     variant: meta.variant,
                     entry_name,
-                    binary: path.join("bin").join(&meta.name),
+                    root: path.join("bin"),
                     path,
                 })
             })
@@ -108,73 +109,64 @@ impl Store {
         results
     }
 
-    /// Insert a verified binary. Idempotent — skips if already present.
+    /// Insert an artifact as a content-addressed entry. Idempotent — skips if
+    /// the same content is already stored.
     pub fn insert(
         &self,
         name: &str,
         version: &str,
         variant: Option<&str>,
-        binary_bytes: &[u8],
-        source_url: &str,
-        archive_sha256: &str,
+        artifact: &Artifact,
     ) -> Result<StorePath> {
-        debug_assert!(sha256_hex(binary_bytes).len() >= 12, "SHA-256 hex is always 64 chars");
-        let binary_hash = sha256_hex(binary_bytes);
-        let entry_name = Self::entry_name(name, version, variant, &binary_hash);
+        let content_hash = hash_dir(&artifact.dir)?;
+        let entry_name = Self::entry_name(name, version, variant, &content_hash);
         let entry = self.root.join(&entry_name);
 
         // Idempotent — skip if already there
         if entry.exists() {
             tracing::debug!("store hit: {}", entry.display());
             return Ok(StorePath {
-                hash: binary_hash,
+                hash: content_hash,
                 name: name.to_string(),
                 version: version.to_string(),
                 variant: variant.map(String::from),
                 entry_name,
-                binary: entry.join("bin").join(name),
+                root: entry.join("bin"),
                 path: entry,
             });
         }
 
         // Create the entry directory. Use create_dir (not _all) to avoid
-        // silently succeeding if another process raced us — the O_CREAT|O_EXCL
-        // below handles the file-level race, but we should not write meta.toml
-        // over an existing entry.
+        // silently succeeding if another process raced us.
         match std::fs::create_dir(&entry) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 tracing::debug!("store hit (race): {}", entry.display());
                 return Ok(StorePath {
-                    hash: binary_hash,
+                    hash: content_hash,
                     name: name.to_string(),
                     version: version.to_string(),
                     variant: variant.map(String::from),
                     entry_name,
-                    binary: entry.join("bin").join(name),
+                    root: entry.join("bin"),
                     path: entry,
                 });
             }
             Err(e) => return Err(e.into()),
         }
 
-        std::fs::create_dir_all(entry.join("bin"))?;
+        // Copy the package root into the entry under 'bin'.
+        let root = entry.join("bin");
+        copy_dir_contents(&artifact.dir, &root)?;
 
-        // Write binary to temp file, then rename into place.
-        // Prevents zero-byte entries if the process crashes mid-write.
-        let binary_path = entry.join("bin").join(name);
-        let tmp_binary = binary_path.with_extension(format!("bin.{}.tmp", std::process::id()));
-        std::fs::write(&tmp_binary, binary_bytes)?;
-        std::fs::rename(&tmp_binary, &binary_path)?;
-
-        // Metadata — same temp+rename pattern
+        // Metadata — temp+rename so a crash never leaves a partial meta.toml.
         let meta = StoreMeta {
             name: name.to_string(),
             version: version.to_string(),
             variant: variant.map(String::from),
-            source_url: source_url.to_string(),
-            archive_sha256: archive_sha256.to_string(),
-            binary_sha256: binary_hash.clone(),
+            source_url: artifact.source_url.clone(),
+            archive_sha256: artifact.archive_hash.clone(),
+            content_sha256: content_hash.clone(),
             installed_at: crate::lock::unix_now(),
         };
         let meta_path = entry.join("meta.toml");
@@ -185,93 +177,21 @@ impl Store {
         )?;
         std::fs::rename(&tmp_meta, &meta_path)?;
 
-        seal(&binary_path);
-
         tracing::info!(
             "stored {}@{}{} ({})",
             name,
             version,
             variant.map_or(String::new(), |v| format!("-{v}")),
-            &binary_hash[..12],
+            &content_hash[..12],
         );
 
         Ok(StorePath {
-            hash: binary_hash,
+            hash: content_hash,
             name: name.to_string(),
             version: version.to_string(),
             variant: variant.map(String::from),
             entry_name,
-            binary: binary_path,
-            path: entry,
-        })
-    }
-
-    /// Store an entire directory tree as a multi-file package.
-    /// Copies the source directory into the store entry.
-    pub fn insert_dir(
-        &self,
-        name: &str,
-        version: &str,
-        variant: Option<&str>,
-        src_dir: &Path,
-        source_url: &str,
-        archive_sha256: &str,
-    ) -> Result<StorePath> {
-        // Hash the entire directory for content-addressing
-        let dir_hash = hash_dir(src_dir)?;
-        let entry_name = Self::entry_name(name, version, variant, &dir_hash);
-        let entry = self.root.join(&entry_name);
-
-        if entry.exists() {
-            tracing::debug!("store hit: {}", entry.display());
-            return Ok(StorePath {
-                hash: dir_hash,
-                name: name.to_string(),
-                version: version.to_string(),
-                variant: variant.map(String::from),
-                entry_name,
-                binary: entry.clone(),
-                path: entry,
-            });
-        }
-
-        std::fs::create_dir_all(&entry)?;
-
-        // Preserve the directory structure under a 'bin' subdir for consistency
-        let bin_dir = entry.join("bin");
-        copy_dir_contents(src_dir, &bin_dir)?;
-        set_executable_recursive(&bin_dir)?;
-
-        // Metadata
-        let meta = StoreMeta {
-            name: name.to_string(),
-            version: version.to_string(),
-            variant: variant.map(String::from),
-            source_url: source_url.to_string(),
-            archive_sha256: archive_sha256.to_string(),
-            binary_sha256: dir_hash.clone(),
-            installed_at: crate::lock::unix_now(),
-        };
-        std::fs::write(
-            entry.join("meta.toml"),
-            toml::to_string(&meta).map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?,
-        )?;
-
-        tracing::info!(
-            "stored {}@{}{} (dir, {})",
-            name,
-            version,
-            variant.map_or(String::new(), |v| format!("-{v}")),
-            &dir_hash[..12],
-        );
-
-        Ok(StorePath {
-            hash: dir_hash,
-            name: name.to_string(),
-            version: version.to_string(),
-            variant: variant.map(String::from),
-            entry_name,
-            binary: entry.clone(),
+            root,
             path: entry,
         })
     }
@@ -280,16 +200,6 @@ impl Store {
     pub fn remove_by_entry(&self, entry_name: &str) -> Result<()> {
         let entry = self.root.join(entry_name);
         if entry.exists() {
-            unseal_dir(&entry);
-            // Find and unseal the binary inside
-            if let Ok(meta_toml) = std::fs::read_to_string(entry.join("meta.toml"))
-                && let Ok(meta) = toml::from_str::<StoreMeta>(&meta_toml)
-            {
-                let bin = entry.join("bin").join(&meta.name);
-                if bin.exists() {
-                    let () = unseal(&bin);
-                }
-            }
             std::fs::remove_dir_all(&entry)?;
             tracing::info!("removed {}", entry.display());
         }
@@ -301,7 +211,7 @@ impl Store {
         self.remove_by_entry(entry_name)
     }
 
-    /// Re-hash every binary and compare against meta.toml.
+    /// Re-hash every package root and compare against meta.toml.
     pub fn verify_all(&self) -> Result<Vec<VerifyResult>> {
         let mut results = vec![];
 
@@ -314,19 +224,19 @@ impl Store {
             let meta: StoreMeta = toml::from_str(&std::fs::read_to_string(&meta_path)?)
                 .map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?;
 
-            let bin = entry.path().join("bin").join(&meta.name);
-            if !bin.exists() {
+            let root = entry.path().join("bin");
+            if !root.exists() {
                 results.push(VerifyResult::Missing(meta.name));
                 continue;
             }
 
-            let actual = sha256_hex(&std::fs::read(&bin)?);
-            if actual == meta.binary_sha256 {
+            let actual = hash_dir(&root)?;
+            if actual == meta.content_sha256 {
                 results.push(VerifyResult::Ok(meta.name));
             } else {
                 results.push(VerifyResult::Tampered {
                     name: meta.name,
-                    expected: meta.binary_sha256,
+                    expected: meta.content_sha256,
                     actual,
                 });
             }
@@ -398,59 +308,18 @@ fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn set_executable_recursive(dir: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(dir).map_err(|e| IkkError::Store(e.to_string()))? {
-        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            set_executable_recursive(&path)?;
-        } else {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555));
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg_attr(unix, expect(clippy::used_underscore_binding))]
-fn seal(_path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o555)) {
-            tracing::warn!("failed to seal {}: {e}", _path.display());
-        }
-    }
-}
-
-#[cfg_attr(unix, expect(clippy::used_underscore_binding))]
-fn unseal(_path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755)) {
-            tracing::warn!("failed to unseal {}: {e}", _path.display());
-        }
-    }
-}
-
-#[cfg_attr(unix, expect(clippy::used_underscore_binding))]
-fn unseal_dir(_path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755)) {
-            tracing::warn!("failed to unseal {}: {e}", _path.display());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::Artifact;
+
+    fn artifact(dir: &Path) -> Artifact {
+        Artifact {
+            dir: dir.to_path_buf(),
+            archive_hash: "abc".into(),
+            source_url: "url".into(),
+        }
+    }
 
     #[test]
     fn sha256_known_value() {
@@ -462,83 +331,91 @@ mod tests {
 
     #[test]
     fn entry_name_no_variant() {
-        let name = Store::entry_name(
-            "ripgrep",
-            "14.1.1",
-            None,
-            "abcdef1234567890abcdef1234567890abcdef12",
-        );
+        let name =
+            Store::entry_name("ripgrep", "14.1.1", None, "abcdef1234567890abcdef1234567890");
         assert_eq!(name, "abcdef123456-ripgrep-14.1.1");
     }
 
     #[test]
     fn entry_name_with_variant() {
-        let name = Store::entry_name(
-            "llama-cpp",
-            "b5262",
-            Some("cuda12"),
-            "def456789012def456789012def456789012def456",
-        );
-        assert_eq!(name, "def456789012-llama-cpp-b5262-cuda12");
+        let name =
+            Store::entry_name("tool", "1.0", Some("cuda12"), "abcdef1234567890abcdef1234567890");
+        assert_eq!(name, "abcdef123456-tool-1.0-cuda12");
     }
 
     #[test]
-    fn insert_is_idempotent() {
-        let dir = std::env::temp_dir().join("ikk_test_idem");
-        let _ = std::fs::remove_dir_all(&dir);
-        let store = Store::open(dir.clone()).unwrap();
-
-        let sp1 = store.insert("test", "1.0", None, b"binary", "url", "abc").unwrap();
-        let sp2 = store.insert("test", "1.0", None, b"binary", "url", "abc").unwrap();
-        assert_eq!(sp1.hash, sp2.hash);
-        assert_eq!(sp1.path, sp2.path);
-
-        let sp3 = store.insert("test", "1.0", None, b"different", "url", "def").unwrap();
-        assert_ne!(sp1.hash, sp3.hash);
-
-        let _ = std::fs::remove_dir_all(&dir);
+    fn entry_name_empty_variant_ignored() {
+        let name =
+            Store::entry_name("tool", "1.0", Some(""), "abcdef1234567890abcdef1234567890");
+        assert_eq!(name, "abcdef123456-tool-1.0");
     }
 
     #[test]
-    fn verify_all_detects_tamper() {
-        let dir = std::env::temp_dir().join("ikk_test_tamper");
-        let _ = std::fs::remove_dir_all(&dir);
-        let store = Store::open(dir.clone()).unwrap();
+    fn insert_and_find() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_store_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
 
-        let sp = store.insert("test", "1.0", None, b"original", "url", "abc").unwrap();
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("rg"), b"binary").unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&sp.binary, std::fs::Permissions::from_mode(0o755));
-        }
-        std::fs::write(&sp.binary, b"tampered").unwrap();
+        let store = Store::open(tmp.join("store")).unwrap();
+        let sp = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
+
+        assert!(sp.path.exists());
+        assert!(sp.root.join("rg").exists());
+        assert!(!sp.path.join(".sealed").exists());
+
+        let found = store.find_all("ripgrep");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].entry_name, sp.entry_name);
+
+        // Idempotent re-insert
+        let sp2 = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
+        assert_eq!(sp2.entry_name, sp.entry_name);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn verify_detects_tampering() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_verify_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("rg"), b"binary").unwrap();
+
+        let store = Store::open(tmp.join("store")).unwrap();
+        let sp = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
+
+        // Tamper
+        std::fs::write(sp.root.join("rg"), b"tampered").unwrap();
 
         let results = store.verify_all().unwrap();
         assert!(matches!(results[0], VerifyResult::Tampered { .. }));
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn variant_stored_separately() {
-        let dir = std::env::temp_dir().join("ikk_test_variant");
-        let _ = std::fs::remove_dir_all(&dir);
-        let store = Store::open(dir.clone()).unwrap();
+    fn remove_entry() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_remove_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
 
-        // Same binary bytes but different variant labels → different entry names
-        // (because variant is part of the directory name)
-        let sp1 = store.insert("llama", "b5262", Some("cpu"), b"binary", "url", "abc").unwrap();
-        let sp2 = store.insert("llama", "b5262", Some("cuda12"), b"binary", "url", "def").unwrap();
-        assert_eq!(sp1.hash, sp2.hash, "same binary content → same hash");
-        assert_ne!(sp1.entry_name, sp2.entry_name, "different variant → different entry name");
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("rg"), b"binary").unwrap();
 
-        // Different binary content → different entry
-        let sp3 = store
-            .insert("llama", "b5262", Some("cpu"), b"different binary content", "url", "ghi")
-            .unwrap();
-        assert_ne!(sp1.entry_name, sp3.entry_name, "different binary → different entry");
+        let store = Store::open(tmp.join("store")).unwrap();
+        let sp = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
 
-        let _ = std::fs::remove_dir_all(&dir);
+        store.remove("ripgrep", "14.1.1", &sp.entry_name).unwrap();
+        assert!(!sp.path.exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

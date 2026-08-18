@@ -9,29 +9,23 @@ use crate::store::sha256_hex;
 
 const LATEST: &str = "latest";
 
-// ── fetched artifact ─────────────────────────────────────────────────────────
+// ── artifact ───────────────────────────────────────────────────────────────
 
-/// Result of fetching a package source.
+/// The result of fetching a package source.
+///
+/// An artifact is always a directory — the normalized package root containing
+/// everything the package author shipped, with author-chosen file names intact.
 #[derive(Debug)]
-pub struct FetchedBinary {
-    /// Binary contents when the source resolves to a single binary.
-    ///
-    /// Empty when `is_dir` is true.
-    pub binary_bytes: Vec<u8>,
+pub struct Artifact {
+    /// Package root directory (single top-level wrapper already unwrapped).
+    pub dir: PathBuf,
 
-    /// SHA-256 of the downloaded/source artifact.
+    /// SHA-256 of the original downloaded/source content.
+    /// Empty for local directories — there is no archive to hash.
     pub archive_hash: String,
 
-    /// Original source location.
-    ///
-    /// For multi-binary archives this points to the extracted directory.
+    /// Original source location (URL or file path).
     pub source_url: String,
-
-    /// Binary filename detected from the source.
-    pub detected_name: String,
-
-    /// True when the source contains multiple binaries.
-    pub is_dir: bool,
 }
 
 // ── source trait ─────────────────────────────────────────────────────────────
@@ -45,14 +39,8 @@ pub trait Source: Send + Sync {
     /// Resolve a version specification such as `latest` or an exact version.
     async fn version(&self, spec: &str) -> Result<String>;
 
-    /// Fetch the requested version.
-    async fn fetch(
-        &self,
-        version: &str,
-        platform: &Platform,
-        binary_name: &str,
-        stage_dir: &Path,
-    ) -> Result<FetchedBinary>;
+    /// Fetch the requested version as an `Artifact`.
+    async fn fetch(&self, version: &str, platform: &Platform, stage_dir: &Path) -> Result<Artifact>;
 }
 
 // ── remote source ────────────────────────────────────────────────────────────
@@ -106,21 +94,21 @@ impl Source for RemoteSource {
         Ok(release.version)
     }
 
-    async fn fetch(
-        &self,
-        version: &str,
-        platform: &Platform,
-        binary_name: &str,
-        stage_dir: &Path,
-    ) -> Result<FetchedBinary> {
+    async fn fetch(&self, version: &str, platform: &Platform, stage_dir: &Path) -> Result<Artifact> {
         let assets = self.remote.assets(version).await?;
-        let asset = crate::extract::best_asset(&assets, platform, None)?;
+        let asset = crate::extract::best_asset(&assets, platform)?;
 
         tracing::info!("downloading {}…", asset.name);
 
         let bytes = self.http.get(&asset.url).send().await?.bytes().await?;
 
-        process_downloaded_bytes(binary_name, &bytes, &asset.name, &asset.url, stage_dir)
+        let dir = crate::extract::extract_dir(&bytes, &asset.name, stage_dir)?;
+
+        Ok(Artifact {
+            dir,
+            archive_hash: sha256_hex(&bytes),
+            source_url: asset.url.clone(),
+        })
     }
 }
 
@@ -153,22 +141,22 @@ impl Source for UrlSource {
         Ok(spec.to_string())
     }
 
-    async fn fetch(
-        &self,
-        version: &str,
-        _platform: &Platform,
-        binary_name: &str,
-        stage_dir: &Path,
-    ) -> Result<FetchedBinary> {
+    async fn fetch(&self, version: &str, _platform: &Platform, stage_dir: &Path) -> Result<Artifact> {
         let url = resolve_uri_template(&self.template, version, self.variant.as_deref())?;
 
-        tracing::info!("downloading {}…", url);
+        tracing::info!("downloading {url}…");
 
-        let bytes = crate::progress::download_bytes(&self.http, &url, binary_name).await?;
+        let bytes = crate::progress::download_bytes(&self.http, &url, "").await?;
 
         let filename = url.rsplit('/').next().unwrap_or("download");
 
-        process_downloaded_bytes(binary_name, &bytes, filename, &url, stage_dir)
+        let dir = crate::extract::extract_dir(&bytes, filename, stage_dir)?;
+
+        Ok(Artifact {
+            dir,
+            archive_hash: sha256_hex(&bytes),
+            source_url: url,
+        })
     }
 }
 
@@ -196,13 +184,7 @@ impl Source for LocalSource {
         Ok("local".into())
     }
 
-    async fn fetch(
-        &self,
-        _version: &str,
-        _platform: &Platform,
-        binary_name: &str,
-        stage_dir: &Path,
-    ) -> Result<FetchedBinary> {
+    async fn fetch(&self, _version: &str, _platform: &Platform, stage_dir: &Path) -> Result<Artifact> {
         if !self.path.exists() {
             return Err(IkkError::LocalPathNotFound(self.path.display().to_string()));
         }
@@ -210,15 +192,9 @@ impl Source for LocalSource {
         let source_url = self.path.display().to_string();
 
         if self.is_dir {
-            let bytes = build_local(&self.path, binary_name, self.build.as_deref())?;
-
-            return Ok(FetchedBinary {
-                binary_bytes: bytes,
-                archive_hash: String::new(),
-                source_url,
-                detected_name: binary_name.to_string(),
-                is_dir: false,
-            });
+            // Build in place, then the source directory *is* the package root.
+            run_build_commands(&self.path, self.build.as_deref())?;
+            return Ok(Artifact { dir: self.path.clone(), archive_hash: String::new(), source_url });
         }
 
         let bytes = std::fs::read(&self.path)?;
@@ -226,102 +202,10 @@ impl Source for LocalSource {
 
         let filename = self.path.file_name().and_then(|name| name.to_str()).unwrap_or("");
 
-        let binary_path = crate::extract::extract(&bytes, filename, binary_name, stage_dir)?;
+        let dir = crate::extract::extract_dir(&bytes, filename, stage_dir)?;
 
-        let detected_name = binary_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(binary_name)
-            .to_string();
-
-        let binary_bytes = std::fs::read(&binary_path)?;
-
-        let _ = std::fs::remove_file(&binary_path);
-
-        Ok(FetchedBinary { binary_bytes, archive_hash, source_url, detected_name, is_dir: false })
+        Ok(Artifact { dir, archive_hash, source_url })
     }
-}
-
-// ── shared download/extraction ───────────────────────────────────────────────
-
-fn process_downloaded_bytes(
-    binary_name: &str,
-    bytes: &[u8],
-    filename: &str,
-    source_url: &str,
-    stage_dir: &Path,
-) -> Result<FetchedBinary> {
-    let archive_hash = sha256_hex(bytes);
-
-    let archive_kind = crate::extract::ArchiveKind::detect(filename);
-
-    let is_archive = matches!(
-        archive_kind,
-        crate::extract::ArchiveKind::TarGz
-            | crate::extract::ArchiveKind::TarXz
-            | crate::extract::ArchiveKind::Zip
-    );
-
-    if is_archive {
-        let extracted_dir = crate::extract::extract_dir(bytes, filename, stage_dir)?;
-
-        let binaries = crate::extract::list_binaries(&extracted_dir)?;
-
-        match binaries.as_slice() {
-            [binary] => {
-                let detected_name = binary
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(binary_name)
-                    .to_string();
-
-                let binary_bytes = std::fs::read(binary)?;
-
-                let _ = std::fs::remove_dir_all(&extracted_dir);
-
-                return Ok(FetchedBinary {
-                    binary_bytes,
-                    archive_hash,
-                    source_url: source_url.to_string(),
-                    detected_name,
-                    is_dir: false,
-                });
-            }
-
-            [] => {
-                let _ = std::fs::remove_dir_all(&extracted_dir);
-            }
-
-            _ => {
-                tracing::info!("detected multi-binary package ({} binaries)", binaries.len());
-
-                return Ok(FetchedBinary {
-                    binary_bytes: Vec::new(),
-                    archive_hash,
-                    source_url: extracted_dir.display().to_string(),
-                    detected_name: binary_name.to_string(),
-                    is_dir: true,
-                });
-            }
-        }
-    }
-
-    let binary_path = crate::extract::extract(bytes, filename, binary_name, stage_dir)?;
-
-    let detected_name =
-        binary_path.file_name().and_then(|name| name.to_str()).unwrap_or(binary_name).to_string();
-
-    let binary_bytes = std::fs::read(&binary_path)?;
-
-    let _ = std::fs::remove_file(&binary_path);
-
-    Ok(FetchedBinary {
-        binary_bytes,
-        archive_hash,
-        source_url: source_url.to_string(),
-        detected_name,
-        is_dir: false,
-    })
 }
 
 // ── URI template ─────────────────────────────────────────────────────────────
@@ -356,15 +240,16 @@ pub(crate) fn resolve_uri_template(
 
 // ── local build ──────────────────────────────────────────────────────────────
 
-pub(crate) fn build_local(
-    dir: &Path,
-    binary_name: &str,
-    build: Option<&[String]>,
-) -> Result<Vec<u8>> {
+/// Run the configured build commands in the source directory.
+///
+/// The directory itself is the package root afterwards — ikk does not look
+/// for or name any specific build output.
+fn run_build_commands(dir: &Path, build: Option<&[String]>) -> Result<()> {
     use std::process::Command;
 
-    let commands =
-        build.ok_or_else(|| IkkError::BuildMissingCommands { name: binary_name.to_string() })?;
+    let Some(commands) = build else {
+        return Ok(());
+    };
 
     for command in commands {
         let status = if cfg!(windows) {
@@ -375,29 +260,14 @@ pub(crate) fn build_local(
 
         if !status.success() {
             return Err(IkkError::BuildStepFailed {
-                name: binary_name.to_string(),
+                name: dir.display().to_string(),
                 command: command.clone(),
                 exit_code: status.code(),
             });
         }
     }
 
-    let candidates = [
-        dir.join("target").join("release").join(binary_name),
-        dir.join("build").join(binary_name),
-        dir.join(binary_name),
-    ];
-
-    for path in &candidates {
-        if path.exists() {
-            return Ok(std::fs::read(path)?);
-        }
-    }
-
-    Err(IkkError::BuildBinaryNotFound {
-        name: binary_name.to_string(),
-        binary: binary_name.to_string(),
-    })
+    Ok(())
 }
 
 #[cfg(test)]
