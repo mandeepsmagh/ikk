@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use ikk_core::{
-    config::Config,
+    config::{Config, DEFAULT_SELF_UPDATE_REPO},
     home::IkkHome,
     shell::{Shell, write_rc},
 };
@@ -58,6 +58,9 @@ pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
     } else {
         let mut config = Config::default();
         config.defaults.remote.clone_from(&remote);
+        // Self-update points at the default publishing repo by default; users
+        // can edit that one line in ikk.toml to use a fork or another forge.
+        config.defaults.self_update_repo = DEFAULT_SELF_UPDATE_REPO.to_string();
         config.save(&config_path)?;
         println!("created {}", config_path.display());
     }
@@ -83,6 +86,8 @@ pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
     } else {
         println!("no default remote set — specify host in each package URI");
     }
+
+    println!("self-update repo: {} (edit in ikk.toml to change)", DEFAULT_SELF_UPDATE_REPO);
 
     if !args.silent {
         println!("\nrestart your shell or run:");

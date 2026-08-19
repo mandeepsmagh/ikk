@@ -43,16 +43,28 @@ pub struct Config {
     pub packages: BTreeMap<String, PackageConfig>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+/// Default repository that publishes the ikk binary, in `owner/repo` form.
+///
+/// This is the single place to change the upstream for self-update. `init`
+/// writes it into `ikk.toml`, so users can edit one line if they fork or
+/// build from elsewhere — no other code references a hardcoded repo.
+pub const DEFAULT_SELF_UPDATE_REPO: &str = "mandeepsmagh/ikk";
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Defaults {
     /// Default source host used for `owner/repo` shorthand.
     pub remote: Option<String>,
 
     /// Repository that publishes the ikk binary itself, in `owner/repo`
-    /// form. Required for `ikk self-update`; unset means self-update is
-    /// disabled (no hardcoded upstream — works for any fork or forge).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub self_update_repo: Option<String>,
+    /// form. Used by `ikk self-update`; change it to point at a fork or
+    /// alternate forge.
+    pub self_update_repo: String,
+}
+
+impl Default for Defaults {
+    fn default() -> Self {
+        Self { remote: None, self_update_repo: DEFAULT_SELF_UPDATE_REPO.to_string() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -322,7 +334,10 @@ mod tests {
     #[test]
     fn package_mode_remote_shorthand() {
         let config = Config {
-            defaults: Defaults { remote: Some("github.com".into()), self_update_repo: None },
+            defaults: Defaults {
+                remote: Some("github.com".into()),
+                self_update_repo: "owner/repo".into(),
+            },
             ..Config::default()
         };
 
@@ -449,6 +464,7 @@ mod tests {
         let contents = r#"
 [defaults]
 remote = "github.com"
+self_update_repo = "mandeepsmagh/ikk"
 
 [packages.ripgrep]
 uri = "BurntSushi/ripgrep"
@@ -499,7 +515,10 @@ uri = "sharkdp/fd"
     #[test]
     fn package_mode_local_wins_over_expansion() {
         let config = Config {
-            defaults: Defaults { remote: Some("github.com".into()), self_update_repo: None },
+            defaults: Defaults {
+                remote: Some("github.com".into()),
+                self_update_repo: "owner/repo".into(),
+            },
             ..Config::default()
         };
 

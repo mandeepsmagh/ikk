@@ -5,12 +5,11 @@ use ikk_core::{home::IkkHome, platform::score_asset, remote::RemoteRegistry};
 
 #[derive(Args)]
 #[command(after_help = "Updates the ikk binary itself to the latest release.\n\n\
-                  The repository is read from `defaults.self_update_repo` in \
-                  ikk.toml (e.g. `owner/repo`). If it is not set, self-update \
-                  is disabled — set it to point at wherever your ikk was built \
-                  from. No account or upstream is hardcoded.\n\n\
-                  The new binary is verified (SHA-256) and swapped into place \
-                  — ikk never installs itself into its own store or lock file.\n\n\
+                  The publishing repository comes from `defaults.self_update_repo` \
+                  in ikk.toml (set automatically by `ikk init`). Change that one \
+                  line if you build from a fork or another forge.\n\n\
+                  The new binary is verified (SHA-256) and swapped into place — \
+                  ikk never installs itself into its own store or lock file.\n\n\
                   Use --check to only see if an update is available.")]
 pub struct SelfUpdateArgs {
     /// Only check if an update is available
@@ -22,15 +21,9 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
     let ctx = Ctx::load_readonly(home)?;
     let current = env!("CARGO_PKG_VERSION");
 
-    // Resolve the publishing repo from config — nothing is hardcoded.
-    let Some(repo) = &ctx.config.defaults.self_update_repo else {
-        bail!(
-            "self-update is not configured.\n  \
-             set `defaults.self_update_repo = \"<owner>/<repo>\" in ikk.toml to enable it"
-        );
-    };
-
-    let url = ctx.config.resolve_uri(repo)?;
+    // Publishing repo comes from config (set by `ikk init`); the user can point
+    // it at a fork or another forge by editing one line.
+    let url = ctx.config.resolve_uri(&ctx.config.defaults.self_update_repo)?;
     let remote = ctx.registry.remote_for(&url)?;
 
     let release = remote.latest().await?;
