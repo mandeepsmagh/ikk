@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{IkkError, Result};
 use crate::remote::RemoteConfig;
 
-const KNOWN_SECTIONS: &[&str] = &["defaults", "security", "auth", "store", "remotes"];
+const KNOWN_SECTIONS: &[&str] = &["defaults", "security", "auth", "store", "remotes", "packages"];
 
 // ── package mode ────────────────────────────────────────────────────────────
 

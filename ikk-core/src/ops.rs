@@ -126,6 +126,9 @@ async fn install_from_source<'a>(
 /// Symlinks/junctions are preferred; a full copy is the degraded fallback
 /// for filesystems that don't support them.
 pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<()> {
+    // bin/ may not exist yet (e.g. CLI flow without a prior `ikk init`).
+    std::fs::create_dir_all(home.bin_dir())?;
+
     let link = home.bin_dir().join(name);
 
     // Remove any existing link or directory. On Windows, junctions are
@@ -148,7 +151,9 @@ pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<()> {
     }
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink(target, &link)?;
+    std::os::unix::fs::symlink(target, &link).map_err(|e| {
+        IkkError::Store(format!("failed to create bin link {}: {e}", link.display()))
+    })?;
 
     #[cfg(windows)]
     if !create_junction(target, &link) {

@@ -31,14 +31,17 @@ pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
 
     let binary_name = if args.binary.is_empty() { args.name.clone() } else { args.binary.clone() };
 
-    let binary_path = find_binary(&pkg_dir, &binary_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "binary '{}' not found in package '{}' — available binaries:\n{}",
-            binary_name,
-            args.name,
-            list_binaries(&pkg_dir).join("\n")
-        )
-    })?;
+    // Default: the package name; fallback: the sole executable in the package.
+    let binary_path = find_binary(&pkg_dir, &binary_name)
+        .or_else(|| if args.binary.is_empty() { single_executable(&pkg_dir) } else { None })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "binary '{}' not found in package '{}' — available binaries:\n{}",
+                binary_name,
+                args.name,
+                list_binaries(&pkg_dir).join("\n")
+            )
+        })?;
 
     // Exec
     let status = Command::new(&binary_path).args(&args.args).status()?;
@@ -69,6 +72,31 @@ fn find_binary(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> 
         }
     }
     None
+}
+
+/// The single executable in the package, if there is exactly one.
+fn single_executable(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    collect_executables(root, &mut found);
+    match found.len() {
+        1 => Some(found.pop().unwrap()),
+        _ => None,
+    }
+}
+
+fn collect_executables(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_executables(&path, out);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && is_executable(name)
+            {
+                out.push(path);
+            }
+        }
+    }
 }
 
 fn list_binaries(dir: &std::path::Path) -> Vec<String> {
