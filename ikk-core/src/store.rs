@@ -9,6 +9,11 @@ pub struct Store {
     root: PathBuf,
 }
 
+/// Exclusive store lock — released on drop.
+pub struct StoreLock {
+    _file: std::fs::File,
+}
+
 #[derive(Debug, Clone)]
 pub struct StorePath {
     /// Content hash of the package root (full SHA-256 hex).
@@ -194,6 +199,32 @@ impl Store {
             root,
             path: entry,
         })
+    }
+
+    /// Acquire an exclusive lock on the store. Held for the duration of any
+    /// command that mutates the store or lock file; released on drop.
+    ///
+    /// Uses `flock`/`LockFileEx` semantics — a crashed holder releases the
+    /// lock automatically when its process dies (no stale-lock cleanup needed).
+    pub fn lock(&self) -> Result<StoreLock> {
+        use fs2::FileExt;
+
+        let path = self.root.join(".lock");
+        std::fs::create_dir_all(&self.root)?;
+        // The lock file's contents are irrelevant — only its existence and
+        // the advisory lock matter. We never truncate it.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(StoreLock { _file: file }),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(IkkError::StoreBusy),
+            Err(e) => Err(IkkError::Io(e)),
+        }
     }
 
     /// Remove a store entry by entry name.

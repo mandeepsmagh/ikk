@@ -10,7 +10,7 @@ pub struct InfoArgs {
 }
 
 pub fn run(args: InfoArgs, home: &IkkHome) -> Result<()> {
-    let ctx = Ctx::load(home)?;
+    let ctx = Ctx::load_readonly(home)?;
 
     let pkg = ctx
         .config
@@ -34,6 +34,7 @@ pub fn run(args: InfoArgs, home: &IkkHome) -> Result<()> {
         }
         println!("  url:      {}", locked.uri);
         println!("  sha256:   {}", locked.sha256);
+        println!("  link:     {}", locked.link_type);
         println!("  entry:    {}", locked.bin_entry);
     } else {
         println!("\nnot yet installed — run 'ikk sync'");

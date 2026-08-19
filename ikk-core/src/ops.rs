@@ -111,7 +111,7 @@ async fn install_from_source<'a>(
 
     // 4. Link — each package owns bin/<name>/, so author-native binary names
     // never collide.
-    link_bin(req.home, req.name, &sp.root)?;
+    let link_type = link_bin(req.home, req.name, &sp.root)?;
 
     // 5. Lock
     lock.insert(
@@ -122,6 +122,7 @@ async fn install_from_source<'a>(
             uri: req.pkg.uri.clone(),
             sha256: artifact.archive_hash.clone(),
             bin_entry: sp.entry_name.clone(),
+            link_type,
             installed_at: crate::lock::unix_now(),
         },
     );
@@ -136,8 +137,9 @@ async fn install_from_source<'a>(
 /// Create `bin/<name>/` pointing at the store entry's package root.
 ///
 /// Symlinks/junctions are preferred; a full copy is the degraded fallback
-/// for filesystems that don't support them.
-pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<()> {
+/// for filesystems that don't support them. Returns the link type actually
+/// used (`"link"` or `"copy"`) so callers can record it in the lock file.
+pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<String> {
     // bin/ may not exist yet (e.g. CLI flow without a prior `ikk init`).
     std::fs::create_dir_all(home.bin_dir())?;
 
@@ -171,14 +173,16 @@ pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<()> {
     if !create_junction(target, &link) {
         tracing::warn!("junction unavailable, falling back to copy for {}", link.display());
         crate::store::copy_dir(target, &link)?;
+        return Ok("copy".into());
     }
 
     #[cfg(not(any(unix, windows)))]
     {
         crate::store::copy_dir(target, &link)?;
+        return Ok("copy".into());
     }
 
-    Ok(())
+    Ok("link".into())
 }
 
 /// Windows: create a directory junction (no admin required).
@@ -346,6 +350,7 @@ mod tests {
                 uri: "url".into(),
                 sha256: "abc".into(),
                 bin_entry: sp.entry_name.clone(),
+                link_type: "link".into(),
                 installed_at: 0,
             },
         );

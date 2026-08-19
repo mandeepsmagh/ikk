@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -46,6 +47,12 @@ pub struct Config {
 pub struct Defaults {
     /// Default source host used for `owner/repo` shorthand.
     pub remote: Option<String>,
+
+    /// Repository that publishes the ikk binary itself, in `owner/repo`
+    /// form. Required for `ikk self-update`; unset means self-update is
+    /// disabled (no hardcoded upstream — works for any fork or forge).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_update_repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,47 +104,24 @@ impl SecurityConfig {
     }
 }
 
+/// Whole days elapsed since an ISO 8601 timestamp.
+/// Accepts full timestamps with a zone offset (`...Z` / `+HH:MM`) and
+/// date-only strings (treated as UTC midnight). Returns `None` if invalid.
 pub(crate) fn days_since_iso8601(s: &str) -> Option<u64> {
-    let date_part = s.split('T').next()?;
+    use std::str::FromStr;
 
-    let mut parts = date_part.split('-');
-    let year: i64 = parts.next()?.parse().ok()?;
-    let month: u32 = parts.next()?.parse().ok()?;
-    let day: u32 = parts.next()?.parse().ok()?;
+    // `Timestamp` parses ISO 8601 with `Z` or a numeric offset, but requires
+    // a time component. Date-only strings ("2024-01-15") are treated as UTC
+    // midnight; naive datetimes get a `Z` suffix.
+    let normalized =
+        if s.contains('T') { Cow::Borrowed(s) } else { Cow::Owned(format!("{s}T00:00:00Z")) };
 
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
+    let then = jiff::Timestamp::from_str(&normalized).ok()?;
+    let now = jiff::Timestamp::now();
 
-    let days = days_from_civil(year, month, day);
-    let now_days = days_from_civil_utc_now()?;
-
-    Some(now_days.saturating_sub(days))
-}
-
-fn days_from_civil(mut y: i64, m: u32, d: u32) -> u64 {
-    let mut m = m as i64;
-
-    if m <= 2 {
-        y -= 1;
-        m += 12;
-    }
-
-    let d = d as i64;
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let doy = (153 * (m as u64 - 3) + 2) / 5 + d as u64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-
-    era as u64 * 146_097 + doe - 719_468
-}
-
-fn days_from_civil_utc_now() -> Option<u64> {
-    use std::time::SystemTime;
-
-    let duration = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).ok()?;
-
-    Some(duration.as_secs() / 86_400)
+    // Whole days between the two instants (UTC, no DST → 24h days).
+    let seconds = (now - then).total(jiff::Unit::Second).ok()?;
+    Some((seconds / 86_400.0).floor().max(0.0) as u64)
 }
 
 // ── package classification ──────────────────────────────────────────────────
@@ -338,7 +322,7 @@ mod tests {
     #[test]
     fn package_mode_remote_shorthand() {
         let config = Config {
-            defaults: Defaults { remote: Some("github.com".into()) },
+            defaults: Defaults { remote: Some("github.com".into()), self_update_repo: None },
             ..Config::default()
         };
 
@@ -515,7 +499,7 @@ uri = "sharkdp/fd"
     #[test]
     fn package_mode_local_wins_over_expansion() {
         let config = Config {
-            defaults: Defaults { remote: Some("github.com".into()) },
+            defaults: Defaults { remote: Some("github.com".into()), self_update_repo: None },
             ..Config::default()
         };
 

@@ -10,7 +10,7 @@ pub struct ListArgs {
 }
 
 pub fn run(args: ListArgs, home: &IkkHome) -> Result<()> {
-    let ctx = Ctx::load(home)?;
+    let ctx = Ctx::load_readonly(home)?;
 
     if let Some(name) = &args.name {
         print_details(name, &ctx)?;
@@ -72,6 +72,7 @@ fn print_details(name: &str, ctx: &Ctx) -> Result<()> {
         }
         println!("url:       {}", locked.uri);
         println!("sha256:    {}", locked.sha256);
+        println!("link:      {}", locked.link_type);
         println!("entry:     {}", locked.bin_entry);
     } else {
         println!();

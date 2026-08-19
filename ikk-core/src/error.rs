@@ -63,6 +63,9 @@ pub enum IkkError {
     #[error("store error: {0}")]
     Store(String),
 
+    #[error("another ikk process is using the store — wait for it to finish and try again")]
+    StoreBusy,
+
     #[error("file not found: {path}")]
     FileNotFound { path: PathBuf },
 

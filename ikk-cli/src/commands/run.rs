@@ -17,7 +17,7 @@ pub struct RunArgs {
 }
 
 pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
-    let ctx = Ctx::load(home)?;
+    let ctx = Ctx::load_readonly(home)?;
 
     if ctx.lock.get(&args.name).is_none() {
         anyhow::bail!("'{}' not installed — run 'ikk sync'", args.name);
