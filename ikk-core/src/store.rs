@@ -206,11 +206,6 @@ impl Store {
         Ok(())
     }
 
-    /// Remove a store entry by name, version, and entry name.
-    pub fn remove(&self, _name: &str, _version: &str, entry_name: &str) -> Result<()> {
-        self.remove_by_entry(entry_name)
-    }
-
     /// Re-hash every package root and compare against meta.toml.
     pub fn verify_all(&self) -> Result<Vec<VerifyResult>> {
         let mut results = vec![];
@@ -407,7 +402,7 @@ mod tests {
         let store = Store::open(tmp.join("store")).unwrap();
         let sp = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
 
-        store.remove("ripgrep", "14.1.1", &sp.entry_name).unwrap();
+        store.remove_by_entry(&sp.entry_name).unwrap();
         assert!(!sp.path.exists());
 
         let _ = std::fs::remove_dir_all(&tmp);

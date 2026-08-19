@@ -93,6 +93,19 @@ async fn install_from_source<'a>(
 
     let artifact = source.fetch(&version, req.platform, &stage).await?;
 
+    // Verify the expected archive hash if one is pinned in config.
+    // An empty actual hash means there was no archive to verify (local dir).
+    if let Some(expected) = &req.pkg.sha256
+        && artifact.archive_hash != *expected
+    {
+        return Err(IkkError::HashMismatch {
+            name: req.name.to_string(),
+            version: version.clone(),
+            expected: expected.clone(),
+            actual: artifact.archive_hash.clone(),
+        });
+    }
+
     // 3. Store
     let sp = store.insert(req.name, &version, req.pkg.variant.as_deref(), &artifact)?;
 
@@ -109,7 +122,6 @@ async fn install_from_source<'a>(
             uri: req.pkg.uri.clone(),
             sha256: artifact.archive_hash.clone(),
             bin_entry: sp.entry_name.clone(),
-            is_dir: true,
             installed_at: crate::lock::unix_now(),
         },
     );
@@ -243,7 +255,7 @@ pub fn remove(name: &str, home: &IkkHome, store: &Store, lock: &mut LockFile) ->
 
     // Remove store entry
     if let Some(locked) = lock.get(name) {
-        store.remove(name, &locked.version, &locked.bin_entry)?;
+        store.remove_by_entry(&locked.bin_entry)?;
     }
 
     // Remove lock entry
@@ -334,7 +346,6 @@ mod tests {
                 uri: "url".into(),
                 sha256: "abc".into(),
                 bin_entry: sp.entry_name.clone(),
-                is_dir: true,
                 installed_at: 0,
             },
         );
@@ -386,7 +397,6 @@ mod tests {
         // Lock recorded
         let locked = lock.get("mytool").unwrap();
         assert_eq!(locked.version, "local");
-        assert!(locked.is_dir);
 
         // Store verifies
         let results = store.verify_all().unwrap();

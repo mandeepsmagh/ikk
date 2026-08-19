@@ -37,17 +37,8 @@ pub struct LockedPackage {
     /// Content-addressed store entry name — `{hash12}-{name}-{version}`.
     pub bin_entry: String,
 
-    /// Always true — every package is a directory linked from `bin/<name>/`.
-    /// Kept for backwards compatibility with older lock files.
-    #[serde(default = "default_true")]
-    pub is_dir: bool,
-
     /// Unix timestamp of installation.
     pub installed_at: u64,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl LockFile {
@@ -222,7 +213,6 @@ mod tests {
             uri: uri.into(),
             sha256: hash.into(),
             bin_entry: format!("{}-foo-{}", &padded[..12], version),
-            is_dir: true,
             installed_at: 1_700_000_000,
         }
     }
@@ -296,24 +286,5 @@ mod tests {
         lock.tree_root = Some("deadbeef".into());
 
         assert!(matches!(lock.verify(), Err(IkkError::HashMismatch { .. })));
-    }
-
-    #[test]
-    fn old_lock_without_is_dir_loads() {
-        let toml = r#"
-[packages.foo]
-version = "1.0"
-uri = "https://example.com/foo"
-sha256 = "abc"
-bin_entry = "abc123-foo-1.0"
-installed_at = 1700000000
-"#;
-
-        let lock: LockFile = toml::from_str(toml).unwrap();
-
-        let pkg = lock.get("foo").unwrap();
-
-        assert!(pkg.is_dir);
-        assert_eq!(pkg.version, "1.0");
     }
 }

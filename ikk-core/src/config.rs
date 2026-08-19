@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 use crate::error::{IkkError, Result};
 use crate::remote::RemoteConfig;
 
-const KNOWN_SECTIONS: &[&str] = &["defaults", "security", "auth", "store", "remotes", "packages"];
-
 // ── package mode ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,8 +235,6 @@ impl Config {
 
         let mut packages = BTreeMap::new();
 
-        // save() writes packages under [packages.<name>]; legacy configs may
-        // use top-level [name] sections. Accept both.
         if let Some(value) = raw.get("packages") {
             let table = value
                 .as_table()
@@ -252,17 +248,6 @@ impl Config {
 
                 packages.insert(key.clone(), package);
             }
-        }
-
-        for (key, value) in &raw {
-            if KNOWN_SECTIONS.contains(&key.as_str()) {
-                continue;
-            }
-
-            let package: PackageConfig =
-                value.clone().try_into().map_err(|e| IkkError::Toml(format!("[{key}]: {e}")))?;
-
-            packages.insert(key.clone(), package);
         }
 
         Ok(Self { defaults, security, auth, store, remotes, packages })
@@ -474,18 +459,18 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_top_level_packages() {
+    fn deserialize_nested_packages() {
         let tmp = std::env::temp_dir().join("ikk_test_deser.toml");
 
         let contents = r#"
 [defaults]
 remote = "github.com"
 
-[ripgrep]
+[packages.ripgrep]
 uri = "BurntSushi/ripgrep"
 version = "14.1.1"
 
-[fd]
+[packages.fd]
 uri = "sharkdp/fd"
 "#;
 
@@ -543,28 +528,5 @@ uri = "sharkdp/fd"
         };
 
         assert_eq!(config.package_mode(&pkg), PackageMode::Local);
-    }
-
-    #[test]
-    fn typo_section_gives_clear_error() {
-        let tmp = std::env::temp_dir().join("ikk_test_typo.toml");
-
-        std::fs::write(
-            &tmp,
-            r#"
-[securty]
-min_release_age_days = 3
-"#,
-        )
-        .unwrap();
-
-        let result = Config::load(&tmp);
-
-        assert!(matches!(result, Err(IkkError::Toml(_))));
-
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("[securty]"));
-
-        let _ = std::fs::remove_file(&tmp);
     }
 }

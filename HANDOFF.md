@@ -1,8 +1,16 @@
 # HANDOFF — S-Tier Refactor: Cleanup Audit
 
-**Branch:** `refac/core-arch` · **State: core refactor + CLI migration complete and green; audit below is the remaining work**
+**Branch:** `refac/core-arch` · **State: audit items 1–4 done and green; item 5 (self-update) needs an owner decision**
 
-## What's done (verified green, commit `cbd76a6`)
+## What's done this session (audit items 1–4)
+
+- Removed legacy top-level `[name]` package sections from `Config::load` (only `[packages.<name>]` accepted now); dropped `KNOWN_SECTIONS`, rewrote `deserialize_top_level_packages` as `deserialize_nested_packages`, deleted `typo_section_gives_clear_error`.
+- Deleted `LockedPackage.is_dir` + `default_true` + `old_lock_without_is_dir_loads` test. Note: old lock files with an `is_dir = true` line still load fine (serde ignores unknown fields by default).
+- Deleted `Store::remove(name, version, entry_name)` wrapper; callers use `remove_by_entry`.
+- **sha256 verification now enforced**: `install_from_source` in `ops.rs` compares `artifact.archive_hash` against `pkg.sha256` when set, returning `HashMismatch`. Local *directory* sources have an empty archive hash, so a pinned sha256 on a local dir fails (intended: no archive to verify). The `--sha256` flag / config field / lockfile prints are now kept and honored.
+- Green: `cargo test --workspace`, clippy 0 warnings, fmt clean.
+
+## Previously done (verified green, commit `cbd76a6`)
 
 - Unified `Artifact` pipeline, per-package `bin/<name>/` links, Merkle lockfile — all landed.
 - Config round-trip fixed: `Config::load` reads `[packages.<name>]` (the shape `save()` writes); legacy top-level `[name]` sections still accepted for now.
@@ -11,30 +19,9 @@
 - Full CLI smoke pass exercised: install (local dir), list, info, check, run, sync, upgrade, gc, remove, init.
 - `cargo test --workspace` green, clippy 0 new warnings (1 pre-existing on HEAD: needless borrow in `ops.rs:179`), fmt clean.
 
-## Audit: dead / legacy code to remove
+## Remaining audit item
 
-1. **Legacy top-level `[name]` package sections in `Config::load`** (`ikk-core/src/config.rs`).
-   `save()` only ever writes `[packages.x]`; the loop treating unknown top-level
-   sections as packages is pre-refactor format. Remove the loop, the
-   `typo_section_gives_clear_error` behavior/test, and the
-   `deserialize_top_level_packages` test (rewrite it in nested shape).
-   ~15 lines + 2 tests.
-
-2. **`LockedPackage.is_dir`** (`ikk-core/src/lock.rs:43`).
-   Always `true`, hardcoded at every insert site. Delete field + the
-   `old_lock_without_is_dir_loads` compat test that exists only for it.
-
-3. **`Store::remove(name, version, entry_name)`** (`ikk-core/src/store.rs:210`).
-   Two params are literally `_name`/`_version` (unused). Callers should use
-   `remove_by_entry` directly; delete the wrapper.
-
-4. **`PackageConfig.sha256` / `--sha256` flag** — stored in config and lockfile,
-   printed by `info`/`list`, but **never verified anywhere**. A promise the code
-   doesn't keep. Preferred: wire verification into `install_from_source`
-   (`ikk-core/src/ops.rs`) — compare `artifact.archive_hash` against
-   `pkg.sha256` when set, ~5 lines. Alternative: delete field + flag + prints.
-
-5. **`ikk self-update`** (`ikk-cli/src/commands/self_update.rs`) — half-finished:
+1. **`ikk self-update`** (`ikk-cli/src/commands/self_update.rs`) — half-finished:
    installs ikk into the store under `SELF_BINARY` but never registers it in
    config, and locks "ikk" against itself. Decide: finish or delete. (Owner to decide.)
 
