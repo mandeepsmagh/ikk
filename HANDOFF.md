@@ -1,6 +1,6 @@
 # HANDOFF — S-Tier Package Management Refactor
 
-**Branch:** `refac/core-arch` · **State: nearly done — 1 CLI runtime bug left**
+**Branch:** `refac/core-arch` · **State: core refactor done; CLI smoke pass incomplete; 1 unexplained anomaly blocks verification**
 
 ## The model (read this first)
 
@@ -14,64 +14,86 @@ fetch → Artifact { dir, archive_hash, source_url }
 ```
 
 - `bin/<name>/` is a **per-package directory link** to the store entry. Each package
-  owns its own subdirectory, so author-native binary names (nvim, rg, foo.exe) can
-  never collide. No aliasing, no `binary` field, no collision resolution.
+  owns its own subdirectory, so author-native binary names can never collide.
 - Shell PATH exports `bin/` **and every `bin/*/` subdir** (`shell.rs::path_exports`).
-- The lockfile `tree_root` is a sorted-leaf Merkle digest over
+- Lockfile `tree_root` is a sorted-leaf Merkle digest over
   `name+version+uri+sha256+bin_entry+variant`.
-- Store integrity is `hash_dir` over the whole entry; `seal()`/`unseal()` are gone.
-  Tampering is *detected* by `verify_all()`, not prevented by permissions.
+- Store integrity is `hash_dir` over the whole entry; tampering detected by
+  `verify_all()`, not prevented by permissions.
 
 ## What's done (all verified green)
 
-- `ikk-core`: unified `Artifact` pipeline (`source.rs`), `extract_dir` only
-  (`extract.rs`), single `store.insert(name, version, variant, &Artifact)` with
-  `hash_dir` integrity and no seal, one `install_from_source` pipeline in `ops.rs`,
-  per-package `bin/<name>/` links, Merkle lockfile. **No `binary` field anywhere.**
-- `ikk-cli`: fully migrated — `--binary` flag removed from `add`, `remove` uses the
-  new 4-arg `ops::remove`, `run` discovers executables inside `bin/<name>/`,
-  `sync`/`upgrade` updated, `init` uses new `shell::write_rc`, `self_update` clean.
+- `ikk-core`: unified `Artifact` pipeline, `extract_dir` only, single
+  `store.insert(name, version, variant, &Artifact)` with `hash_dir` integrity,
+  one `install_from_source` pipeline in `ops.rs`, per-package `bin/<name>/` links,
+  Merkle lockfile. **No `binary` field anywhere.**
+- `ikk-cli`: fully migrated to the new pipeline; `--binary` flag removed from `add`.
 - Integration tests updated (`github_e2e.rs`, `real_world.rs`).
 - **All green:** `cargo test --workspace` (55 core + real_world pass; e2e ignored by
   design), `cargo clippy --workspace` 0 warnings, `cargo fmt` clean.
-- Bug fixed during smoke testing: stage cleanup in `install_from_source` destroyed
-  local sources nested under `$IKK_HOME`; now guarded with `stage.exists()`.
 
-## What's left (do these in order)
+### Fixes landed in `d821edc` (this session)
 
-1. **CLI runtime bug — local install fails at the bin-link step.**
-   `ikk install mytool --uri <local-dir>` prints `stored mytool@local (<hash>)` then
-   dies with a bare `io::Error` "No such file or directory" (no context). Evidence:
-   - Store entry is created correctly (`store/<hash12>-mytool-local/bin/hello`).
-   - `$IKK_HOME/bin/` does **not** exist afterwards — the link creation in
-     `link_bin()` (`ikk-core/src/ops.rs`) fails before creating anything.
-   - The identical pipeline passes in the unit test
-     `ops::tests::install_local_directory_end_to_end` (source nested under home), so
-     the difference is something specific to the CLI path — suspect how
-     `Ctx::load` (`ikk-cli/src/commands/mod.rs`) resolves store/home paths, or a
-     missing dir in the CLI flow that unit-test `setup()` creates.
-   - **Next step:** add an `eprintln!`/tracing with the link path + error in
-     `link_bin()`, run once:
-     ```
-     T=$(mktemp -d); mkdir -p $T/pkg/bin; printf '#!/bin/sh\necho hi\n' > $T/pkg/bin/hello; chmod +x $T/pkg/bin/hello
-     IKK_HOME=$T/.ikk ./target/debug/ikk install mytool --uri "$T/pkg"
-     ```
-     Or write a minimal repro test that calls `Ctx::load` + `ops::install_local`
-     exactly like `add.rs` does.
-   - Also add context to the error (e.g. map io errors in `link_bin` to a named
-     `IkkError` variant) so future failures are diagnosable.
+1. **Local install bin-link crash (handoff bug #1 — FIXED).**
+   Root cause: the CLI flow never creates `~/.ikk/bin/` (only `ikk init` did), so
+   `symlink(target, bin/<name>)` in `link_bin()` died with a bare ENOENT. Fix:
+   `create_dir_all(bin_dir)` at the top of `link_bin()` (`ikk-core/src/ops.rs`) plus
+   a named `IkkError::Store` with the link path on symlink failure. Verified via the
+   real CLI: `IKK_HOME=$T/.ikk ikk install mytool --uri $T/pkg` now succeeds and
+   creates `bin/mytool → store/<hash>-mytool-local/bin`.
 
+2. **Config round-trip (`ikk-core/src/config.rs`).**
+   `add.rs` saves packages under `[packages.<name>]`, but `Config::load` parsed every
+   top-level section as a package entry — so the next command hit "missing field
+   uri". Fix: added `"packages"` to `KNOWN_SECTIONS`.
+
+3. **`ikk run` default binary (`ikk-cli/src/commands/run.rs`).**
+   Restored the lost fallback: when no binary is named, try the package name, else
+   the sole executable in the package; ambiguous case lists available binaries.
+
+## ⚠️ Unresolved anomaly — verify first thing next session
+
+**Symptom:** after `ikk install mytool --uri <local-dir>`, `ikk list` prints
+"no packages configured" and `ikk info mytool` says "not found in config", even
+though `$IKK_HOME/ikk.toml` on disk contains `[packages.mytool] uri = "..."`.
+
+**What's been ruled out (do NOT re-verify these):**
+- Source is correct: `KNOWN_SECTIONS` includes `"packages"`; the load loop at
+  `config.rs:235-248` skips known sections and returns `packages` in `Self { .. }`
+  (verified byte-level with `od -c`).
+- TOML structure is as expected: a standalone rustc+toml-1.1.2 program parsing the
+  exact saved file yields top keys `auth, defaults, packages, remotes, security, store`.
+- Single toml crate in the graph (v1.1.2); no cargo config overrides; fresh rebuilds
+  used; unit tests pass (`deserialize_top_level_packages` uses **top-level**
+  `[ripgrep]` sections — it does NOT cover the nested `[packages.x]` shape that
+  `save()` writes).
+
+**Next steps (in order):**
+1. Add a temporary `eprintln!` inside `Config::load` printing each top-level key and
+   the final `packages.len()`, rebuild, run the repro below, read the output. This
+   distinguishes "load returns empty" from "list reads a different file".
+2. Repro:
+   ```
+   T=$(mktemp -d); mkdir -p $T/pkg/bin; printf '#!/bin/sh\necho hi\n' > $T/pkg/bin/hello; chmod +x $T/pkg/bin/hello
+   IKK_HOME=$T/.ikk ./target/debug/ikk install mytool --uri "$T/pkg"
+   cat $T/.ikk/ikk.toml      # shows [packages.mytool]
+   IKK_HOME=$T/.ikk ./target/debug/ikk list   # currently: "no packages configured"
+   ```
+3. Suspects not yet checked: whether `list`/`info` read a different path than
+   `add` writes (both use `home.config_file()` per grep, but confirm at runtime),
+   or a stale build artifact being executed.
+
+## What's left (after the anomaly)
+
+1. **Finish CLI smoke pass** — verified so far: install (local dir), run (named +
+   ambiguous-default error). Still to exercise: check, sync, upgrade, gc, remove,
+   init (PATH block in rc file), and list/info once the anomaly is resolved.
 2. **Known flaky Windows test:** `ops::tests::remove_unlinks_and_cleans` — Windows
    briefly locks a junction after creation; `remove_file` gets os error 5. Fix: give
    `remove()` the same `cmd /C rmdir /S /Q` fallback that `link_bin` has, or a short
    retry. (Not reproducible on macOS.)
-
-3. **Full CLI smoke pass** once #1 is fixed — exercise each command at least once:
-   install (local dir + local archive), run (named + default binary), list, info,
-   check, remove, sync, upgrade, gc, init (PATH block in rc file).
-
-4. When the handoff work is complete, **delete `HANDOFF.md`** — the permanent record
-   is `ikk-core/ROADMAP.md` + git history.
+3. When done, **delete `HANDOFF.md`** — permanent record is `ikk-core/ROADMAP.md` +
+   git history.
 
 ## Conventions
 

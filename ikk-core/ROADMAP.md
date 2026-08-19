@@ -12,7 +12,7 @@ This document outlines the strategic architectural shifts required to transform 
 | §1.D Pure fetching | ⚠️ partial — extraction lives in `extract.rs` (called by `Source::fetch`), not a separate processor stage. Accepted for now. |
 | §2 Integrity auditing over sealing | ✅ `hash_dir` + `verify_all`; no permission-based sealing |
 | §3 Flat-dir model, per-package `bin/<name>/` links | ✅ core done (junction/symlink + copy fallback) · CLI `run`/`remove` migrated |
-| ikk-cli migration | ⚠️ compiles clean, all tests green — one runtime bug: local install fails at bin-link step (see HANDOFF.md) |
+| ikk-cli migration | ⚠️ bin-link crash fixed; unexplained anomaly: `list`/`info` ignore saved `[packages]` config (see HANDOFF.md) |
 | Integration tests | ✅ updated to new APIs |
 
 **Next session: start with `HANDOFF.md` at the repo root.**
