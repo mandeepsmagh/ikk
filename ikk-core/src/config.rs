@@ -151,12 +151,16 @@ impl Config {
     /// so shorthand such as `owner/repo` is correctly treated as remote.
     #[must_use]
     pub fn package_mode(&self, pkg: &PackageConfig) -> PackageMode {
+        // Check the raw URI first: expand_uri would rewrite local paths with
+        // multiple slashes (e.g. /tmp/foo/bar) into https:// URLs.
+        if is_local_uri(&pkg.uri) {
+            return PackageMode::Local;
+        }
+
         let uri = Self::expand_uri(&pkg.uri, self.defaults.remote.as_deref())
             .unwrap_or_else(|| pkg.uri.clone());
 
-        if is_local_uri(&uri) {
-            PackageMode::Local
-        } else if uri.contains("{version}") || uri.contains("{variant}") {
+        if uri.contains("{version}") || uri.contains("{variant}") {
             PackageMode::Template
         } else {
             PackageMode::Remote
@@ -232,6 +236,23 @@ impl Config {
         let remotes = deserialize_section::<Vec<RemoteConfig>>(&raw, "remotes")?;
 
         let mut packages = BTreeMap::new();
+
+        // save() writes packages under [packages.<name>]; legacy configs may
+        // use top-level [name] sections. Accept both.
+        if let Some(value) = raw.get("packages") {
+            let table = value
+                .as_table()
+                .ok_or_else(|| IkkError::Toml("[packages] must be a table".into()))?;
+
+            for (key, value) in table {
+                let package: PackageConfig = value
+                    .clone()
+                    .try_into()
+                    .map_err(|e| IkkError::Toml(format!("[packages.{key}]: {e}")))?;
+
+                packages.insert(key.clone(), package);
+            }
+        }
 
         for (key, value) in &raw {
             if KNOWN_SECTIONS.contains(&key.as_str()) {
@@ -479,6 +500,49 @@ uri = "sharkdp/fd"
         assert!(config.packages["fd"].version.is_none());
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn save_load_round_trip_nested_packages() {
+        let tmp = std::env::temp_dir().join("ikk_test_roundtrip.toml");
+
+        let mut config = Config::default();
+        config.packages.insert(
+            "mytool".into(),
+            PackageConfig {
+                uri: "/tmp/some/pkg".into(),
+                version: None,
+                variant: None,
+                build: None,
+                sha256: None,
+            },
+        );
+
+        config.save(&tmp).unwrap();
+        let loaded = Config::load(&tmp).unwrap();
+
+        assert_eq!(loaded.packages.len(), 1);
+        assert_eq!(loaded.packages["mytool"].uri, "/tmp/some/pkg");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn package_mode_local_wins_over_expansion() {
+        let config = Config {
+            defaults: Defaults { remote: Some("github.com".into()) },
+            ..Config::default()
+        };
+
+        let pkg = PackageConfig {
+            uri: "/tmp/foo/bar".into(),
+            version: None,
+            variant: None,
+            build: None,
+            sha256: None,
+        };
+
+        assert_eq!(config.package_mode(&pkg), PackageMode::Local);
     }
 
     #[test]

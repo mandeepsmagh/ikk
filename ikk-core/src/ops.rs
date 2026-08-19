@@ -208,9 +208,18 @@ fn expand_path(uri: &str) -> std::path::PathBuf {
 /// the `cmd /C rmdir /S /Q` fallback (same as `link_bin`).
 fn remove_dir_or_link(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_symlink() => std::fs::remove_file(path)?,
-        Ok(_) => std::fs::remove_dir_all(path)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(meta) if meta.is_symlink() => match std::fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            // Windows briefly locks junctions after creation; fall through to rmdir.
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+            Err(e) => return Err(e.into()),
+        },
+        Ok(_) => match std::fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+            Err(e) => return Err(e.into()),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
     }
 
