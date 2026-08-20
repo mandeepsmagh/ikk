@@ -192,7 +192,7 @@ fn create_junction(target: &Path, link: &Path) -> bool {
     // Use `cmd /C mklink /J` for directory junctions.
     let Ok(output) = std::process::Command::new("cmd")
         .args(["/C", "mklink", "/J"])
-        .arg(&link)
+        .arg(link)
         .arg(target)
         .output()
     else {

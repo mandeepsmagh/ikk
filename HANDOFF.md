@@ -4,6 +4,8 @@
 
 ## What's done this session
 
+- **Fixed Windows build break in `self_update.rs`**: the unix branch of `replace_binary` used `Permissions::from_mode` (unix-only) without a `cfg(not(windows))` gate, so `cargo build` failed on Windows. Now the whole unix path is gated; `file_stem` is dead code on Windows (harmless warning). Also clippy: dropped needless `&link` borrow in `ops.rs` junction creation.
+
 ### Cleanup audit (items 1–5)
 - Removed legacy top-level `[name]` package sections from `Config::load` (only `[packages.<name>]` accepted now); dropped `KNOWN_SECTIONS`, rewrote `deserialize_top_level_packages` as `deserialize_nested_packages`.
 - Deleted `LockedPackage.is_dir` + `default_true` + its compat test. Old lock files with an `is_dir = true` line still load fine (serde ignores unknown fields).

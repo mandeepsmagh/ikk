@@ -124,23 +124,23 @@ fn replace_binary(bytes: &[u8]) -> Result<()> {
     let exe = std::env::current_exe().context("cannot determine current executable path")?;
 
     #[cfg(windows)]
-    {
-        return replace_binary_windows(&exe, bytes);
-    }
+    return replace_binary_windows(&exe, bytes);
 
     #[cfg(not(windows))]
-    use std::os::unix::fs::PermissionsExt;
+    {
+        use std::os::unix::fs::PermissionsExt;
 
-    let tmp = exe.with_file_name(format!("{}.new-{}", file_stem(&exe), std::process::id()));
+        let tmp = exe.with_file_name(format!("{}.new-{}", file_stem(&exe), std::process::id()));
 
-    std::fs::write(&tmp, bytes)?;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-    std::fs::rename(&tmp, &exe).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        ikk_core::error::IkkError::Io(e)
-    })?;
+        std::fs::write(&tmp, bytes)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::rename(&tmp, &exe).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            ikk_core::error::IkkError::Io(e)
+        })?;
 
-    Ok(())
+        Ok(())
+    }
 }
 
 /// Windows: rename the old exe aside, move the new one into place. The old
