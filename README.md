@@ -88,8 +88,8 @@ ikk sync
 | `owner/repo` | Forge discovery | Auto-resolves via `defaults.remote`, picks best asset for your OS/arch |
 | `host/owner/repo` | Forge discovery | Explicit forge host |
 | `https://.../{version}...` | URL template | Direct download with `{version}` and optional `{variant}` tokens |
-| `file:///path/to/binary` | Local binary | Links as-is, never copies |
-| `file:///path/to/source` + `build` | Local build | Runs shell commands in source dir |
+| `file:///path/to/binary` | Local binary | Copied into the store, then linked like any other package |
+| `file:///path/to/dir` + `build` | Local build | Runs build commands in the dir, then the dir is copied into the store |
 
 ## Directory Layout
 
