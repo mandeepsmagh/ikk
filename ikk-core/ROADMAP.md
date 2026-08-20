@@ -14,7 +14,7 @@ This document outlines the strategic architectural shifts required to transform 
 | §3 Flat-dir model, per-package `bin/<name>/` links | ✅ core done (junction/symlink + copy fallback) · CLI `run`/`remove` migrated |
 | ikk-cli migration | ✅ done — config round-trip fixed, CLI smoke pass complete (install/list/info/check/sync/upgrade/gc/remove/init) |
 | Integration tests | ✅ updated to new APIs |
-| §4 Release asset naming + SHA256SUMS | ⏳ next — assets named `ikk-{os}-{arch}.{ext}`; release publishes a `SHA256SUMS` file (see §4) |
+| §4 Release asset naming + SHA256SUMS | ⚠️ code done — assets named `ikk-{os}-{arch}.{ext}`, release publishes `SHA256SUMS`; awaiting merge to main + tag for end-to-end verification of `ikk self-update` (see §4) |
 
 ---
 
@@ -82,7 +82,9 @@ An S-Tier core must be a "dumb" but extremely fast engine. Currently, too much "
 **Recommendation:**
 * **Rename assets to `ikk-{os}-{arch}.{ext}`** — e.g. `ikk-linux-x86_64.tar.gz`, `ikk-darwin-aarch64.tar.gz`, `ikk-darwin-x86_64.tar.gz`, `ikk-windows-x86_64.zip`. Map the cargo target triple in `release.yml` (a small lookup table in the packaging step). This matches `score_asset()` conventions and is the name format the owner prefers.
 * **Publish one `SHA256SUMS`** in the release job: after downloading all artifacts, write `sha256sum`-format lines (`<hash>  <name>`) and upload it as a release asset. `self_update.rs` already parses exactly this format (`name == asset_name || name == *{asset_name}`).
-* **Verify with a real test:** after the next tag, run `ikk self-update --check` / `ikk self-update` against the published release and confirm asset match + checksum verification (no "skipping verification" note).
+* **Verify with a real test:** after the branch merges to main and the next tag is cut, run `ikk self-update --check` / `ikk self-update` against the published release and confirm asset match + checksum verification (no "skipping verification" note).
+
+**Status:** code side done — matrix entries carry an `asset:` name (`ikk-{os}-{arch}.{ext}`), each job writes a `SHA256SUMS.part` line, the release job concatenates them into `SHA256SUMS` and uploads it. Awaiting merge + tag for end-to-end verification.
 * **Optional (later):** sign the release (GPG/sigstore) so `SHA256SUMS` itself is trusted, not just present.
 
 ## 3. Performance & UX (The "Zero Friction" Principle)

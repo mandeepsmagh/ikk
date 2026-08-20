@@ -1,16 +1,19 @@
 # HANDOFF — S-Tier Refactor: Cleanup Audit
 
-**Branch:** `refac/core-arch` · **State: all S-Tier architecture items closed (incl. §1.D); green. Next: §4 release asset naming + SHA256SUMS (see ROADMAP §4).**
+**Branch:** `refac/core-arch` · **State: all S-Tier items closed incl. §4 code side; green. Remaining: owner merges to main, tags, then verifies `ikk self-update` end-to-end against the new release.**
 
-## Next session (ROADMAP §4)
+## Next session (ROADMAP §4 — verification only)
 
-- **Release asset naming + self-update trust gap** (full detail in `ikk-core/ROADMAP.md` §4):
-  - `release.yml` names assets `ikk-{cargo-target-triple}.tar.gz`; `self_update.rs` picks assets via `score_asset()` which expects `ikk-{os}-{arch}.{ext}` — self-update currently fails with "no ikk release asset for platform".
-  - Fix: map target triple → `ikk-{os}-{arch}.{ext}` in `release.yml` (e.g. `ikk-linux-x86_64.tar.gz`, `ikk-windows-x86_64.zip`).
-  - `release.yml` publishes per-asset `.sha256` sidecars, but `self_update` looks for a single `SHA256SUMS` file (`<hash>  <name>` lines) — verification is silently skipped today. Fix: generate + upload `SHA256SUMS` in the release job.
-  - Verify end-to-end after the next tag: `ikk self-update` must match the asset and verify the checksum (no skip note).
+- Code side of §4 is done (asset naming + `SHA256SUMS` in `release.yml`, see "What's done this session").
+- **Cannot be tested until this branch merges into main** — the release workflow only runs on `v*` tags, and self-update needs a published release with the new asset names.
+- After owner merges + tags: run `ikk self-update --check`, then `ikk self-update`, and confirm (a) the platform asset is matched, (b) checksum verification against `SHA256SUMS` succeeds — **no "skipping verification" note**. If green, mark §4 ✅ in ROADMAP and delete HANDOFF.md.
 
 ## What's done this session
+
+- **§4 release pipeline (code side)**:
+  - `release.yml`: assets are now named `ikk-{os}-{arch}.{ext}` via a per-matrix-entry `asset:` field (`ikk-linux-x86_64.tar.gz`, `ikk-linux-aarch64.tar.gz`, `ikk-darwin-aarch64.tar.gz`, `ikk-darwin-x86_64.tar.gz`, `ikk-windows-x86_64.zip`) — matches `score_asset()` conventions. Per-asset `.sha256` sidecars dropped.
+  - Each build job writes a one-line `SHA256SUMS.part` (`<hash>  <name>`; unix via `sha256sum`, windows via `Get-FileHash | ToLower`); the release job concatenates them into a single `SHA256SUMS` and uploads it as an asset — exactly the format `self_update.rs` parses.
+  - New core test `score_release_asset_convention` pins the naming convention against future `score_asset` regressions.
 
 - **§1.D pure fetching closed**: `Source::fetch` now returns `RawContent` (`Bytes { bytes, filename }` | `Directory { path }`) — sources only fetch. The processor stage is `RawContent::process(stage_dir) -> Artifact` in the new `processor.rs`, which owns `ArchiveKind` detection, `extract_dir`, wrapper unwrapping, and archive hashing. `extract.rs` deleted (moved to `processor.rs`); `ops.rs` pipeline is now `fetch` → `process` → `store.insert`.
 - **Fixed Windows build break in `self_update.rs`**: the unix branch of `replace_binary` used `Permissions::from_mode` (unix-only) without a `cfg(not(windows))` gate, so `cargo build` failed on Windows. Now the whole unix path is gated; `file_stem` is dead code on Windows (harmless warning). Also clippy: dropped needless `&link` borrow in `ops.rs` junction creation.

@@ -221,6 +221,20 @@ mod tests {
         assert!(score_asset("darwintools-x86_64.tar.gz", &p).is_none());
     }
 
+    /// The release pipeline names assets `ikk-{os}-{arch}.{ext}` (see
+    /// .github/workflows/release.yml); self-update relies on these scoring.
+    #[test]
+    fn score_release_asset_convention() {
+        let linux = Platform { os: Os::Linux, arch: Arch::X86_64 };
+        assert!(score_asset("ikk-linux-x86_64.tar.gz", &linux).is_some());
+
+        let mac_arm = Platform { os: Os::MacOs, arch: Arch::Aarch64 };
+        assert!(score_asset("ikk-darwin-aarch64.tar.gz", &mac_arm).is_some());
+
+        let win = Platform { os: Os::Windows, arch: Arch::X86_64 };
+        assert!(score_asset("ikk-windows-x86_64.zip", &win).is_some());
+    }
+
     #[test]
     fn score_unknown_platform_is_none() {
         let p = Platform { os: Os::Unknown, arch: Arch::Unknown };
