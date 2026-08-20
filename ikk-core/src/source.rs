@@ -5,7 +5,6 @@ use crate::config::SecurityConfig;
 use crate::error::{IkkError, Result};
 use crate::platform::Platform;
 use crate::remote::Remote;
-use crate::store::sha256_hex;
 
 const LATEST: &str = "latest";
 
@@ -28,20 +27,53 @@ pub struct Artifact {
     pub source_url: String,
 }
 
+// ── raw content ──────────────────────────────────────────────────────────────
+
+/// Raw fetched content, before processing.
+///
+/// `Bytes` is a downloaded archive or raw binary; `Directory` points at a
+/// local directory that is already the package root.
+pub enum RawContent {
+    Bytes { bytes: Vec<u8>, filename: String },
+    Directory { path: PathBuf },
+}
+
+impl RawContent {
+    /// Process raw content into a normalized `Artifact`.
+    ///
+    /// This is the single place where archive detection and extraction happen
+    /// — sources never do it themselves.
+    pub async fn process(self, stage_dir: &Path) -> Result<Artifact> {
+        match self {
+            Self::Bytes { bytes, filename } => {
+                let archive_hash = crate::store::sha256_hex(&bytes);
+                let dir = crate::processor::extract_dir(&bytes, &filename, stage_dir)?;
+                Ok(Artifact { dir, archive_hash, source_url: filename })
+            }
+            Self::Directory { path } => Ok(Artifact {
+                dir: path.clone(),
+                archive_hash: String::new(),
+                source_url: path.display().to_string(),
+            }),
+        }
+    }
+}
+
 // ── source trait ─────────────────────────────────────────────────────────────
 
 /// A package source.
 ///
-/// Sources resolve versions and fetch artifacts. How the source discovers,
-/// downloads, builds, or extracts the artifact is an implementation detail.
+/// Sources resolve versions and fetch **raw content** — downloading bytes or
+/// pointing at a local directory. Archive detection and extraction live in
+/// the processor stage (`RawContent::process`), so new source types are
+/// trivial to add.
 #[async_trait]
 pub trait Source: Send + Sync {
     /// Resolve a version specification such as `latest` or an exact version.
     async fn version(&self, spec: &str) -> Result<String>;
 
-    /// Fetch the requested version as an `Artifact`.
-    async fn fetch(&self, version: &str, platform: &Platform, stage_dir: &Path)
-    -> Result<Artifact>;
+    /// Fetch the requested version as raw content.
+    async fn fetch(&self, version: &str, platform: &Platform) -> Result<RawContent>;
 }
 
 // ── remote source ────────────────────────────────────────────────────────────
@@ -95,22 +127,15 @@ impl Source for RemoteSource {
         Ok(release.version)
     }
 
-    async fn fetch(
-        &self,
-        version: &str,
-        platform: &Platform,
-        stage_dir: &Path,
-    ) -> Result<Artifact> {
+    async fn fetch(&self, version: &str, platform: &Platform) -> Result<RawContent> {
         let assets = self.remote.assets(version).await?;
-        let asset = crate::extract::best_asset(&assets, platform)?;
+        let asset = crate::processor::best_asset(&assets, platform)?;
 
         tracing::info!("downloading {}…", asset.name);
 
         let bytes = self.http.get(&asset.url).send().await?.bytes().await?;
 
-        let dir = crate::extract::extract_dir(&bytes, &asset.name, stage_dir)?;
-
-        Ok(Artifact { dir, archive_hash: sha256_hex(&bytes), source_url: asset.url.clone() })
+        Ok(RawContent::Bytes { bytes: bytes.to_vec(), filename: asset.name.clone() })
     }
 }
 
@@ -143,23 +168,16 @@ impl Source for UrlSource {
         Ok(spec.to_string())
     }
 
-    async fn fetch(
-        &self,
-        version: &str,
-        _platform: &Platform,
-        stage_dir: &Path,
-    ) -> Result<Artifact> {
+    async fn fetch(&self, version: &str, _platform: &Platform) -> Result<RawContent> {
         let url = resolve_uri_template(&self.template, version, self.variant.as_deref())?;
 
         tracing::info!("downloading {url}…");
 
         let bytes = crate::progress::download_bytes(&self.http, &url, "").await?;
 
-        let filename = url.rsplit('/').next().unwrap_or("download");
+        let filename = url.rsplit('/').next().unwrap_or("download").to_string();
 
-        let dir = crate::extract::extract_dir(&bytes, filename, stage_dir)?;
-
-        Ok(Artifact { dir, archive_hash: sha256_hex(&bytes), source_url: url })
+        Ok(RawContent::Bytes { bytes, filename })
     }
 }
 
@@ -187,36 +205,22 @@ impl Source for LocalSource {
         Ok("local".into())
     }
 
-    async fn fetch(
-        &self,
-        _version: &str,
-        _platform: &Platform,
-        stage_dir: &Path,
-    ) -> Result<Artifact> {
+    async fn fetch(&self, _version: &str, _platform: &Platform) -> Result<RawContent> {
         if !self.path.exists() {
             return Err(IkkError::LocalPathNotFound(self.path.display().to_string()));
         }
 
-        let source_url = self.path.display().to_string();
-
         if self.is_dir {
-            // Build in place, then the source directory *is* the package root.
+            // Build in place; the source directory *is* the package root.
             run_build_commands(&self.path, self.build.as_deref())?;
-            return Ok(Artifact {
-                dir: self.path.clone(),
-                archive_hash: String::new(),
-                source_url,
-            });
+            return Ok(RawContent::Directory { path: self.path.clone() });
         }
 
         let bytes = std::fs::read(&self.path)?;
-        let archive_hash = sha256_hex(&bytes);
+        let filename =
+            self.path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string();
 
-        let filename = self.path.file_name().and_then(|name| name.to_str()).unwrap_or("");
-
-        let dir = crate::extract::extract_dir(&bytes, filename, stage_dir)?;
-
-        Ok(Artifact { dir, archive_hash, source_url })
+        Ok(RawContent::Bytes { bytes, filename })
     }
 }
 

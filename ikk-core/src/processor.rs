@@ -1,7 +1,15 @@
+//! Artifact processing: the lifecycle stage between raw fetch and storage.
+//!
+//! Sources fetch raw bytes (or point at a local directory); this module
+//! detects the archive type, extracts it, and normalizes the result into an
+//! `Artifact` (a directory). New source types never need to implement
+//! extraction logic.
+
 use std::path::{Path, PathBuf};
 
 use crate::error::{IkkError, Result};
 use crate::platform::{Platform, score_asset};
+use crate::remote::Asset;
 
 pub enum ArchiveKind {
     TarGz,
@@ -37,10 +45,7 @@ impl ArchiveKind {
 /// Choose the release asset that matches the current platform.
 ///
 /// Platform selection only — ikk never picks or renames binaries.
-pub fn best_asset<'a>(
-    assets: &'a [crate::remote::Asset],
-    platform: &Platform,
-) -> Result<&'a crate::remote::Asset> {
+pub fn best_asset<'a>(assets: &'a [Asset], platform: &Platform) -> Result<&'a Asset> {
     assets
         .iter()
         .filter_map(|a| score_asset(&a.name, platform).map(|s| (a, s)))

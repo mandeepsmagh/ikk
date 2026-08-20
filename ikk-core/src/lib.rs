@@ -13,11 +13,11 @@
 
 pub mod config;
 pub mod error;
-pub mod extract;
 pub mod home;
 pub mod lock;
 pub mod ops;
 pub mod platform;
+pub mod processor;
 pub mod progress;
 pub mod registry;
 pub mod remote;

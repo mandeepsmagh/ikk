@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod real_world_tests {
-    use ikk_core::extract::extract_dir;
+    use ikk_core::processor::extract_dir;
 
     #[test]
     fn neovim_macos_directory_extraction() {

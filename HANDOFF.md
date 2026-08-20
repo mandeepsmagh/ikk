@@ -1,9 +1,10 @@
 # HANDOFF — S-Tier Refactor: Cleanup Audit
 
-**Branch:** `refac/core-arch` · **State: all audit items + 4 architectural gaps closed; green**
+**Branch:** `refac/core-arch` · **State: all roadmap items closed (incl. §1.D); green**
 
 ## What's done this session
 
+- **§1.D pure fetching closed**: `Source::fetch` now returns `RawContent` (`Bytes { bytes, filename }` | `Directory { path }`) — sources only fetch. The processor stage is `RawContent::process(stage_dir) -> Artifact` in the new `processor.rs`, which owns `ArchiveKind` detection, `extract_dir`, wrapper unwrapping, and archive hashing. `extract.rs` deleted (moved to `processor.rs`); `ops.rs` pipeline is now `fetch` → `process` → `store.insert`.
 - **Fixed Windows build break in `self_update.rs`**: the unix branch of `replace_binary` used `Permissions::from_mode` (unix-only) without a `cfg(not(windows))` gate, so `cargo build` failed on Windows. Now the whole unix path is gated; `file_stem` is dead code on Windows (harmless warning). Also clippy: dropped needless `&link` borrow in `ops.rs` junction creation.
 
 ### Cleanup audit (items 1–5)
@@ -23,8 +24,6 @@
 - Config round-trip fixed; `package_mode` checks `is_local_uri` on the raw URI before `expand_uri`.
 - Flaky Windows junction-remove test fixed (`cmd rmdir` fallback in `remove_dir_or_link`).
 
-## Remaining (lower priority)
-- **`extract.rs` is a grab-bag** — extraction lives inside `Source::fetch`, not a separate processor stage (ROADMAP §1.D "partial").
 
 ## Conventions
 - Rust 2024, `cargo fmt` (4-space), clippy pedantic with crate-level allows in `lib.rs`.

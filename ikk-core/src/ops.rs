@@ -67,7 +67,7 @@ pub async fn install_local<'a>(
 /// Shared install pipeline for all source types.
 ///
 /// 1. Resolve version.
-/// 2. Fetch artifact (download + extract, or local build).
+/// 2. Fetch raw content, then process it into an artifact (extract, or local build).
 /// 3. Store content-addressed.
 /// 4. Link `bin/<name>/` → store entry (author-native names, no collisions).
 /// 5. Record in lock file.
@@ -91,7 +91,8 @@ async fn install_from_source<'a>(
     }
     std::fs::create_dir_all(&stage)?;
 
-    let artifact = source.fetch(&version, req.platform, &stage).await?;
+    let raw = source.fetch(&version, req.platform).await?;
+    let artifact = raw.process(&stage).await?;
 
     // Verify the expected archive hash if one is pinned in config.
     // An empty actual hash means there was no archive to verify (local dir).

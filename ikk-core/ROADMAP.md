@@ -9,7 +9,7 @@ This document outlines the strategic architectural shifts required to transform 
 | §1.A Remove `binary_name` from core | ✅ done — no `binary` field in core or CLI |
 | §1.B Unified install pipeline | ✅ `install_from_source` is the single path; wrappers are thin |
 | §1.C Unified storage (`store.insert(artifact)`) | ✅ `insert`/`insert_dir` merged; seal/unseal removed |
-| §1.D Pure fetching | ⚠️ partial — extraction lives in `extract.rs` (called by `Source::fetch`), not a separate processor stage. Accepted for now. |
+| §1.D Pure fetching | ✅ `Source::fetch` returns `RawContent`; `RawContent::process` (processor stage) does detection + extraction |
 | §2 Integrity auditing over sealing | ✅ `hash_dir` + `verify_all`; no permission-based sealing |
 | §3 Flat-dir model, per-package `bin/<name>/` links | ✅ core done (junction/symlink + copy fallback) · CLI `run`/`remove` migrated |
 | ikk-cli migration | ✅ done — config round-trip fixed, CLI smoke pass complete (install/list/info/check/sync/upgrade/gc/remove/init) |
@@ -44,13 +44,15 @@ An S-Tier core must be a "dumb" but extremely fast engine. Currently, too much "
 * **Unified Content-Addressing:** Treat everything as a "Content-Addressed Entry." Whether it is one binary or a 10GB directory, the Store should simply accept an `Artifact` and map it to a hash-based directory.
 * **Remove Branching:** Eliminate the `if fetched.is_dir` checks in `ops.rs`. The Store's API should be: `store.insert(artifact)`.
 
-### D. Pure Fetching (`source.rs`)
+### D. Pure Fetching (`source.rs`) — ✅ done
 **Problem:** `source.rs` is currently "heavy" because it handles extraction and archive detection. This makes adding new source types (like Git or S3) difficult because they must also implement extraction logic.
 
 **Recommendation:**
 * **The "Raw Fetch" Pattern:** A `Source` should only be responsible for fetching raw bytes. 
 * **Introduce an `ArtifactProcessor`:** Move the logic for "detecting archive type $\rightarrow$ extracting $\rightarrow$ picking best binary" into a dedicated lifecycle stage. 
 * **Result:** `source.rs` becomes a lightweight interface that is trivial to extend.
+
+**Implementation:** `Source::fetch` returns `RawContent` (`Bytes { bytes, filename }` or `Directory { path }`). The processor stage is `RawContent::process(stage_dir) -> Artifact` in `processor.rs`, which owns `ArchiveKind` detection, `extract_dir`, and hashing. `ops.rs` pipeline: `source.fetch(...)` → `raw.process(&stage)` → `store.insert(artifact)`.
 
 ---
 
