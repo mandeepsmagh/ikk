@@ -1,12 +1,16 @@
 # HANDOFF — S-Tier Refactor: Cleanup Audit
 
-**Branch:** `refac/core-arch` · **State: all S-Tier items closed incl. §4 code side; green. Remaining: owner merges to main, tags, then verifies `ikk self-update` end-to-end against the new release.**
+**Branch:** `main` · **State: all S-Tier items closed; blocked on release pipeline fix (v0.8.0 tag failed).**
 
-## Next session (ROADMAP §4 — verification only)
+## Next session (ROADMAP §4 — finish the release)
 
-- Code side of §4 is done (asset naming + `SHA256SUMS` in `release.yml`, see "What's done this session").
-- **Cannot be tested until this branch merges into main** — the release workflow only runs on `v*` tags, and self-update needs a published release with the new asset names.
-- After owner merges + tags: run `ikk self-update --check`, then `ikk self-update`, and confirm (a) the platform asset is matched, (b) checksum verification against `SHA256SUMS` succeeds — **no "skipping verification" note**. If green, mark §4 ✅ in ROADMAP and delete HANDOFF.md.
+- Branch merged to main (PR #23). Tagged **v0.8.0** and pushed — the `release` job FAILED: GitHub rejected a **0-byte `SHA256SUMS`** asset ("size must be greater than or equal to 1"). The per-platform `SHA256SUMS.part` files apparently never reached the release job, so `cat artifacts/*/SHA256SUMS.part` produced an empty file that `softprops/action-gh-release` uploaded anyway.
+- **Diagnose from the v0.8.0 run logs** (Actions UI): did each build job upload `SHA256SUMS.part`? Does `artifacts/*/SHA256SUMS.part` glob match after `download-artifact@v7 merge-multiple: true`? Likely culprit: artifact path filtering or the parts not being in the uploaded set.
+- Fix branch **`fix/release-sha256sums`** (pushed, PR pending) adds `test -s SHA256SUMS` so a future run fails loudly with the content visible instead of dying at asset upload. Merge it, then:
+  1. Delete the broken v0.8.0 release/tag (or just re-tag — see below).
+  2. Re-push tag `v0.8.0` (delete + recreate) to trigger a fresh run.
+  3. Confirm assets: 5 binaries named `ikk-{os}-{arch}.{ext}` + non-empty `SHA256SUMS`.
+- Then the real test: `ikk self-update --check`, then `ikk self-update` → asset matched, checksum verified, **no "skipping verification" note**. If green: mark §4 ✅ in ROADMAP, delete HANDOFF.md.
 
 ## What's done this session
 

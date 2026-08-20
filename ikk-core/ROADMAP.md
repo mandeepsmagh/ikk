@@ -14,7 +14,7 @@ This document outlines the strategic architectural shifts required to transform 
 | §3 Flat-dir model, per-package `bin/<name>/` links | ✅ core done (junction/symlink + copy fallback) · CLI `run`/`remove` migrated |
 | ikk-cli migration | ✅ done — config round-trip fixed, CLI smoke pass complete (install/list/info/check/sync/upgrade/gc/remove/init) |
 | Integration tests | ✅ updated to new APIs |
-| §4 Release asset naming + SHA256SUMS | ⚠️ code done — assets named `ikk-{os}-{arch}.{ext}`, release publishes `SHA256SUMS`; awaiting merge to main + tag for end-to-end verification of `ikk self-update` (see §4) |
+| §4 Release asset naming + SHA256SUMS | ⚠️ v0.8.0 tag failed — GitHub rejected 0-byte `SHA256SUMS`; fix branch `fix/release-sha256sums` pending, then re-tag (see §4) |
 
 ---
 
