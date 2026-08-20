@@ -86,6 +86,8 @@ jobs:
         run: |
           cat artifacts/*/SHA256SUMS.part | sort -k2 > SHA256SUMS
           cat SHA256SUMS
+          # GitHub rejects zero-byte release assets; fail fast here instead.
+          test -s SHA256SUMS
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
