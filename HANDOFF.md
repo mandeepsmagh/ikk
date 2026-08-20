@@ -1,6 +1,14 @@
 # HANDOFF — S-Tier Refactor: Cleanup Audit
 
-**Branch:** `refac/core-arch` · **State: all roadmap items closed (incl. §1.D); green**
+**Branch:** `refac/core-arch` · **State: all S-Tier architecture items closed (incl. §1.D); green. Next: §4 release asset naming + SHA256SUMS (see ROADMAP §4).**
+
+## Next session (ROADMAP §4)
+
+- **Release asset naming + self-update trust gap** (full detail in `ikk-core/ROADMAP.md` §4):
+  - `release.yml` names assets `ikk-{cargo-target-triple}.tar.gz`; `self_update.rs` picks assets via `score_asset()` which expects `ikk-{os}-{arch}.{ext}` — self-update currently fails with "no ikk release asset for platform".
+  - Fix: map target triple → `ikk-{os}-{arch}.{ext}` in `release.yml` (e.g. `ikk-linux-x86_64.tar.gz`, `ikk-windows-x86_64.zip`).
+  - `release.yml` publishes per-asset `.sha256` sidecars, but `self_update` looks for a single `SHA256SUMS` file (`<hash>  <name>` lines) — verification is silently skipped today. Fix: generate + upload `SHA256SUMS` in the release job.
+  - Verify end-to-end after the next tag: `ikk self-update` must match the asset and verify the checksum (no skip note).
 
 ## What's done this session
 
