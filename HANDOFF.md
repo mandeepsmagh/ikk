@@ -1,22 +1,19 @@
 # HANDOFF — S-Tier Refactor: Cleanup Audit
 
-**Branch:** `main` · **State: all S-Tier items closed; blocked on release pipeline fix (v0.8.0 tag failed).**
+**Branch:** `main` · **State: all S-Tier items closed; release.yml fixed and v0.8.0 re-tagged — run in flight, awaiting confirmation.**
 
 ## Next session (ROADMAP §4 — finish the release)
 
-- Branch merged to main (PR #23). Tagged **v0.8.0** and pushed — the `release` job FAILED: GitHub rejected a **0-byte `SHA256SUMS`** asset ("size must be greater than or equal to 1"). The per-platform `SHA256SUMS.part` files apparently never reached the release job, so `cat artifacts/*/SHA256SUMS.part` produced an empty file that `softprops/action-gh-release` uploaded anyway.
-- **Diagnose from the v0.8.0 run logs** (Actions UI): did each build job upload `SHA256SUMS.part`? Does `artifacts/*/SHA256SUMS.part` glob match after `download-artifact@v7 merge-multiple: true`? Likely culprit: artifact path filtering or the parts not being in the uploaded set.
-- Fix branch **`fix/release-sha256sums`** (pushed, PR pending) adds `test -s SHA256SUMS` so a future run fails loudly with the content visible instead of dying at asset upload. Merge it, then:
-  1. Delete the broken v0.8.0 release/tag (or just re-tag — see below).
-  2. Re-push tag `v0.8.0` (delete + recreate) to trigger a fresh run.
-  3. Confirm assets: 5 binaries named `ikk-{os}-{arch}.{ext}` + non-empty `SHA256SUMS`.
-- Then the real test: `ikk self-update --check`, then `ikk self-update` → asset matched, checksum verified, **no "skipping verification" note**. If green: mark §4 ✅ in ROADMAP, delete HANDOFF.md.
+- `release.yml` rewritten (per-asset `.sha256` version): each build job produces `ikk-{os}-{arch}.{ext}.sha256`; `download-artifact@v8` uses `pattern: ikk-*` + `merge-multiple: true` so the sidecars land flat in `artifacts/`; the release job concatenates `artifacts/*.sha256` into `SHA256SUMS` and asserts 5 lines. This replaces the old `artifacts/*/SHA256SUMS.part` layout that failed on v0.8.0.
+- v0.8.0 tag was deleted and re-created on the new main commit and pushed to trigger a fresh run. **Check the Actions run**: all 5 build jobs pass, then the release job uploads 5 binaries + a non-empty `SHA256SUMS`.
+- If green: `ikk self-update --check`, then `ikk self-update` → asset matched, checksum verified, **no "skipping verification" note**. Then mark §4 ✅ in ROADMAP, delete HANDOFF.md.
+- **Known mismatch (unresolved):** crates are still `0.7.1` (`ikk-cli/Cargo.toml`, `ikk-core/Cargo.toml`) while the tag is `v0.8.0` — the assets are built from `0.7.1` source but published as `v0.8.0`. Decide before a real release: bump crates to `0.8.0` (and refresh `Cargo.lock`) or tag `v0.7.2` instead.
 
 ## What's done this session
 
 - **§4 release pipeline (code side)**:
-  - `release.yml`: assets are now named `ikk-{os}-{arch}.{ext}` via a per-matrix-entry `asset:` field (`ikk-linux-x86_64.tar.gz`, `ikk-linux-aarch64.tar.gz`, `ikk-darwin-aarch64.tar.gz`, `ikk-darwin-x86_64.tar.gz`, `ikk-windows-x86_64.zip`) — matches `score_asset()` conventions. Per-asset `.sha256` sidecars dropped.
-  - Each build job writes a one-line `SHA256SUMS.part` (`<hash>  <name>`; unix via `sha256sum`, windows via `Get-FileHash | ToLower`); the release job concatenates them into a single `SHA256SUMS` and uploads it as an asset — exactly the format `self_update.rs` parses.
+  - `release.yml`: assets are now named `ikk-{os}-{arch}.{ext}` via a per-matrix-entry `asset:` field (`ikk-linux-x86_64.tar.gz`, `ikk-linux-aarch64.tar.gz`, `ikk-darwin-aarch64.tar.gz`, `ikk-darwin-x86_64.tar.gz`, `ikk-windows-x86_64.zip`) — matches `score_asset()` conventions. *(Superseded this session — see top: per-asset `.sha256` sidecars + merged download.)*
+  - Each build job writes a one-line `SHA256SUMS.part` (`<hash>  <name>`; unix via `sha256sum`, windows via `Get-FileHash | ToLower`); the release job concatenates them into a single `SHA256SUMS` and uploads it as an asset — exactly the format `self_update.rs` parses. *(Superseded this session — see top.)*
   - New core test `score_release_asset_convention` pins the naming convention against future `score_asset` regressions.
 
 - **§1.D pure fetching closed**: `Source::fetch` now returns `RawContent` (`Bytes { bytes, filename }` | `Directory { path }`) — sources only fetch. The processor stage is `RawContent::process(stage_dir) -> Artifact` in the new `processor.rs`, which owns `ArchiveKind` detection, `extract_dir`, wrapper unwrapping, and archive hashing. `extract.rs` deleted (moved to `processor.rs`); `ops.rs` pipeline is now `fetch` → `process` → `store.insert`.
