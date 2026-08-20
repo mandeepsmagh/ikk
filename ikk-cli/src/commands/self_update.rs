@@ -164,6 +164,7 @@ fn replace_binary_windows(exe: &std::path::Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn file_stem(path: &std::path::Path) -> String {
     path.file_name().and_then(|n| n.to_str()).unwrap_or("ikk").to_string()
 }
