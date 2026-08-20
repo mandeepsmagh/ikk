@@ -3,7 +3,7 @@ use anyhow::Result;
 use ikk_core::{home::IkkHome, store::VerifyResult};
 
 pub fn run(home: &IkkHome) -> Result<()> {
-    let ctx = Ctx::load(home)?;
+    let ctx = Ctx::load_readonly(home)?;
 
     // Verify lock integrity
     println!("lock:     {}", home.lock_file().display());

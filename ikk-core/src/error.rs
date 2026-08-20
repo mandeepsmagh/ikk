@@ -49,9 +49,6 @@ pub enum IkkError {
     #[error("build step `{command}` exited with code {exit_code:?} (package `{name}`)")]
     BuildStepFailed { name: String, command: String, exit_code: Option<i32> },
 
-    #[error("binary '{binary}' not found after building '{name}' — check build output paths")]
-    BuildBinaryNotFound { name: String, binary: String },
-
     #[error("build failed for '{name}': local directory requires a [build] section")]
     BuildMissingCommands { name: String },
 
@@ -59,15 +56,15 @@ pub enum IkkError {
     #[error("archive extraction failed: {0}")]
     ExtractionFailed(String),
 
-    #[error("binary not found in archive: {0}")]
-    BinaryNotFound(String),
-
     #[error("zip path traversal rejected: {0}")]
     ZipTraversal(String),
 
     // ── I/O and storage ──────────────────────────────────────────────────────
     #[error("store error: {0}")]
     Store(String),
+
+    #[error("another ikk process is using the store — wait for it to finish and try again")]
+    StoreBusy,
 
     #[error("file not found: {path}")]
     FileNotFound { path: PathBuf },

@@ -1,7 +1,7 @@
 use super::Ctx;
 use anyhow::Result;
 use clap::Args;
-use ikk_core::{home::IkkHome, ops, remote::RemoteRegistry};
+use ikk_core::{config::PackageMode, home::IkkHome, ops, remote::RemoteRegistry};
 
 #[derive(Args)]
 pub struct UpgradeArgs {
@@ -17,7 +17,7 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
     let mut ctx = Ctx::load(home)?;
 
     let names: Vec<String> = match &args.name {
-        Some(n) => vec![n.clone()],
+        Some(name) => vec![name.clone()],
         None => ctx.config.packages.keys().cloned().collect(),
     };
 
@@ -28,7 +28,7 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
             anyhow::bail!("package '{name}' not found in config");
         };
 
-        // Skip pinned unless --force
+        // Skip pinned versions unless --force was supplied.
         if pkg.version.as_deref() != Some("latest") && !args.force {
             println!(
                 "  {name} pinned at {} — skipping (use --force to override)",
@@ -37,26 +37,20 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
             continue;
         }
 
-        let before = ctx.lock.get(name).map(|l| l.version.clone());
+        let before = ctx.lock.get(name).map(|locked| locked.version.clone());
 
-        let mode = ikk_core::config::PackageMode::classify(
-            &pkg.uri,
-            ctx.config.defaults.remote.as_deref(),
-            pkg.build.is_some(),
-        )?;
+        let req = ops::InstallRequest {
+            name,
+            pkg: &pkg,
+            config: &ctx.config,
+            platform: &ctx.platform,
+            home: &ctx.home,
+        };
 
-        match mode {
-            ikk_core::config::PackageMode::ForgeDiscovery => {
+        match ctx.config.package_mode(&pkg) {
+            PackageMode::Remote => {
                 let url = ctx.config.resolve_uri(&pkg.uri)?;
                 let remote = ctx.registry.remote_for(&url)?;
-
-                let req = ops::InstallRequest {
-                    name,
-                    pkg: &pkg,
-                    config: &ctx.config,
-                    platform: &ctx.platform,
-                    home: &ctx.home,
-                };
 
                 ops::install(
                     &req,
@@ -68,39 +62,27 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
                 )
                 .await?;
             }
-            ikk_core::config::PackageMode::UrlTemplate => {
-                let req = ops::InstallRequest {
-                    name,
-                    pkg: &pkg,
-                    config: &ctx.config,
-                    platform: &ctx.platform,
-                    home: &ctx.home,
-                };
 
+            PackageMode::Template => {
                 ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await?;
             }
-            ikk_core::config::PackageMode::LocalBinary
-            | ikk_core::config::PackageMode::LocalBuild => {
-                let req = ops::InstallRequest {
-                    name,
-                    pkg: &pkg,
-                    config: &ctx.config,
-                    platform: &ctx.platform,
-                    home: &ctx.home,
-                };
 
-                ops::install_local(&req, &ctx.store, &mut ctx.lock)?;
+            PackageMode::Local => {
+                ops::install_local(&req, &ctx.store, &mut ctx.lock).await?;
             }
         }
 
-        let after = ctx.lock.get(name).map(|l| l.version.clone());
+        let after = ctx.lock.get(name).map(|locked| locked.version.clone());
 
         match (before, after) {
-            (Some(b), Some(a)) if b != a => {
-                println!("  {name}: {b} → {a}");
+            (Some(before), Some(after)) if before != after => {
+                println!("  {name}: {before} → {after}");
                 any_change = true;
             }
-            _ => println!("  {name}: already up to date"),
+
+            _ => {
+                println!("  {name}: already up to date");
+            }
         }
     }
 

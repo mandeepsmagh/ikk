@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::Args;
 use ikk_core::{
-    config::Config,
+    config::{Config, DEFAULT_SELF_UPDATE_REPO},
     home::IkkHome,
-    shell::{Shell, install_path_integration},
+    shell::{Shell, write_rc},
 };
 
 #[derive(Args)]
@@ -58,16 +58,24 @@ pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
     } else {
         let mut config = Config::default();
         config.defaults.remote.clone_from(&remote);
+        // Self-update points at the default publishing repo by default; users
+        // can edit that one line in ikk.toml to use a fork or another forge.
+        config.defaults.self_update_repo = DEFAULT_SELF_UPDATE_REPO.to_string();
         config.save(&config_path)?;
         println!("created {}", config_path.display());
     }
 
     if !args.no_shell {
         let shell = args.shell.map_or_else(Shell::detect, Shell::from);
-        if install_path_integration(&shell, &home.bin_dir())? {
-            println!("added {} to PATH in {:?}", home.bin_dir().display(), shell.rc_file());
-        } else {
-            println!("PATH already configured");
+        match shell.rc_file() {
+            Some(rc) => {
+                let dir = rc.parent().unwrap_or(std::path::Path::new("."));
+                write_rc(dir, shell.as_str(), home)?;
+                println!("added {} to PATH in {}", home.bin_dir().display(), rc.display());
+            }
+            None => {
+                eprintln!("unknown shell — add {} to your PATH manually", home.bin_dir().display());
+            }
         }
     }
 
@@ -78,6 +86,8 @@ pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
     } else {
         println!("no default remote set — specify host in each package URI");
     }
+
+    println!("self-update repo: {} (edit in ikk.toml to change)", DEFAULT_SELF_UPDATE_REPO);
 
     if !args.silent {
         println!("\nrestart your shell or run:");

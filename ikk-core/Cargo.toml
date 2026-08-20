@@ -23,6 +23,8 @@ flate2      = "1"
 tar         = "0.4"
 zip         = "8"
 xz2         = "0.1"
+fs2 = "0.4.3"
+jiff = "0.2.35"
 
 [features]
 default   = []
