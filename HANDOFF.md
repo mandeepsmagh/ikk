@@ -1,13 +1,15 @@
 # HANDOFF — S-Tier Refactor: Cleanup Audit
 
-**Branch:** `main` · **State: all S-Tier items closed; release.yml fixed and v0.8.0 re-tagged — run in flight, awaiting confirmation.**
+**Branch:** `main` · **State: release.yml green (5 binaries + `SHA256SUMS` uploaded); remaining gaps recorded in `REVIEW.md`.**
 
-## Next session (ROADMAP §4 — finish the release)
+## Next session (see `REVIEW.md` for the full gap list)
 
-- `release.yml` rewritten (per-asset `.sha256` version): each build job produces `ikk-{os}-{arch}.{ext}.sha256`; `download-artifact@v8` uses `pattern: ikk-*` + `merge-multiple: true` so the sidecars land flat in `artifacts/`; the release job concatenates `artifacts/*.sha256` into `SHA256SUMS` and asserts 5 lines. This replaces the old `artifacts/*/SHA256SUMS.part` layout that failed on v0.8.0.
-- v0.8.0 tag was deleted and re-created on the new main commit and pushed to trigger a fresh run. **Check the Actions run**: all 5 build jobs pass, then the release job uploads 5 binaries + a non-empty `SHA256SUMS`.
-- If green: `ikk self-update --check`, then `ikk self-update` → asset matched, checksum verified, **no "skipping verification" note**. Then mark §4 ✅ in ROADMAP, delete HANDOFF.md.
-- **Known mismatch (unresolved):** crates are still `0.7.1` (`ikk-cli/Cargo.toml`, `ikk-core/Cargo.toml`) while the tag is `v0.8.0` — the assets are built from `0.7.1` source but published as `v0.8.0`. Decide before a real release: bump crates to `0.8.0` (and refresh `Cargo.lock`) or tag `v0.7.2` instead.
+- v0.8.0 release run is **green**: all 5 build jobs + release job succeeded; assets `ikk-{os}-{arch}.{ext}` + non-empty `SHA256SUMS` uploaded. The release.yml fix (per-asset `.sha256` sidecars + `download-artifact@v8` `pattern`/`merge-multiple`) works.
+- Remaining work, in priority order:
+  1. **Fix `score_asset` x86_64 matching** (`ikk-core/src/platform.rs`) — `name.split(['-','_','.'])` breaks `x86_64` into `x86`+`64`, so x86_64 assets only match via the os-only fallback and can tie with aarch64 assets. Add a regression test that the correct arch asset *wins*, not just `.is_some()`.
+  2. **Bump crates `0.7.1` → `0.8.0`** (both `Cargo.toml`s + `Cargo.lock`), re-tag `v0.8.0` so the published binary matches the tag.
+  3. **Fix `install.sh` / `install.ps1`** — still build old target-triple URLs and download non-published `{url}.sha256`; rewrite for `ikk-{os}-{arch}.{ext}` + verify against `SHA256SUMS`.
+- Then the §4 gate: `ikk self-update --check` → `ikk self-update` → asset matched, checksum verified, **no "skipping verification" note**. If green: mark §4 ✅ in ROADMAP, delete HANDOFF.md.
 
 ## What's done this session
 

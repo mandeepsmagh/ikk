@@ -14,7 +14,7 @@ This document outlines the strategic architectural shifts required to transform 
 | §3 Flat-dir model, per-package `bin/<name>/` links | ✅ core done (junction/symlink + copy fallback) · CLI `run`/`remove` migrated |
 | ikk-cli migration | ✅ done — config round-trip fixed, CLI smoke pass complete (install/list/info/check/sync/upgrade/gc/remove/init) |
 | Integration tests | ✅ updated to new APIs |
-| §4 Release asset naming + SHA256SUMS | ⏳ v0.8.0 re-tagged with fixed release.yml — run in flight; confirm assets + self-update before ✅ |
+| §4 Release asset naming + SHA256SUMS | ⏳ release green (5 assets + `SHA256SUMS`); remaining: `score_asset` x86_64 fix, version bump, install scripts, self-update test (see REVIEW.md) |
 
 ---
 
@@ -84,7 +84,7 @@ An S-Tier core must be a "dumb" but extremely fast engine. Currently, too much "
 * **Publish one `SHA256SUMS`** in the release job: after downloading all artifacts, write `sha256sum`-format lines (`<hash>  <name>`) and upload it as a release asset. `self_update.rs` already parses exactly this format (`name == asset_name || name == *{asset_name}`).
 * **Verify with a real test:** after the branch merges to main and the next tag is cut, run `ikk self-update --check` / `ikk self-update` against the published release and confirm asset match + checksum verification (no "skipping verification" note).
 
-**Status:** release.yml rewritten (per-asset `.sha256` sidecars; `download-artifact@v8` `pattern: ikk-*` + `merge-multiple: true`; release job concatenates `artifacts/*.sha256` into `SHA256SUMS` and asserts 5 lines). v0.8.0 re-tagged and pushed — awaiting end-to-end confirmation of the 5 assets + non-empty `SHA256SUMS`, then `ikk self-update` verification.
+**Status:** release.yml rewritten and verified green (per-asset `.sha256` sidecars; `download-artifact@v8` `pattern: ikk-*` + `merge-multiple: true`; release job concatenates `artifacts/*.sha256` into `SHA256SUMS`). v0.8.0 uploaded 5 binaries + non-empty `SHA256SUMS`. Remaining gaps (score_asset x86_64 matching, install scripts, version mismatch, self-update test) are tracked in `REVIEW.md`.
 * **Optional (later):** sign the release (GPG/sigstore) so `SHA256SUMS` itself is trusted, not just present.
 
 ## 3. Performance & UX (The "Zero Friction" Principle)
