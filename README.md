@@ -81,6 +81,19 @@ Then reconcile:
 ikk sync
 ```
 
+## Private Repos & API Rate Limits
+
+Forge auth is per-host via environment variables — no tokens in config files:
+
+| Forge | Env var |
+|-------|---------|
+| GitHub | `GITHUB_TOKEN` |
+| GitLab | `GITLAB_TOKEN` |
+| Codeberg | `CODEBERG_TOKEN` |
+| Gitea | `GITEA_TOKEN` |
+
+With `GITHUB_TOKEN` set, ikk uses the authenticated API — 5,000 req/hour instead of 60 unauthenticated — and can read private repos. Any `[[remotes]]` entry (built-in or user-defined) may set its own `auth_env` to a different variable.
+
 ## Package Modes
 
 | URI | Mode | Description |
