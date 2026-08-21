@@ -15,6 +15,7 @@ This document outlines the strategic architectural shifts required to transform 
 | ikk-cli migration | ✅ done — config round-trip fixed, CLI smoke pass complete (install/list/info/check/sync/upgrade/gc/remove/init) |
 | Integration tests | ✅ updated to new APIs |
 | §4 Release asset naming + SHA256SUMS | ✅ done — asset naming, `SHA256SUMS`, `score_asset` x86_64, 0.8.0 bump, install scripts; live `self-update` e2e deferred (repo private → API 404) |
+| §5 S-tier review gaps | ⏳ 9 gaps in `REVIEW.md` — dead `AuthConfig`, fail-closed self-update checksum, honest `sync --dry-run`, `upgrade` failure summary, `gc` store lock, stale UA, exec heuristic, `config` coverage, `install.ps1` deprecation |
 
 ---
 
