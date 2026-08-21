@@ -13,8 +13,8 @@ IKK_INSTALL_DIR="${IKK_INSTALL_DIR:-$HOME/.ikk/bin}"
 
 # ── detect platform ────────────────────────────────────────────────────────
 case "$(uname -s)" in
-    Linux)  OS="unknown-linux-gnu" ;;
-    Darwin) OS="apple-darwin" ;;
+    Linux)  OS="linux" ;;
+    Darwin) OS="darwin" ;;
     *)      echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
 
@@ -24,7 +24,7 @@ case "$(uname -m)" in
     *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
 esac
 
-TARGET="${ARCH}-${OS}"
+ASSET="ikk-${OS}-${ARCH}.tar.gz"
 EXT=".tar.gz"
 
 # ── resolve version ────────────────────────────────────────────────────────
@@ -37,7 +37,8 @@ if [ "$IKK_VERSION" = "latest" ]; then
     fi
 fi
 
-URL="https://github.com/${IKK_REPO}/releases/download/${IKK_VERSION}/ikk-${TARGET}${EXT}"
+BASE="https://github.com/${IKK_REPO}/releases/download/${IKK_VERSION}"
+URL="${BASE}/${ASSET}"
 
 echo "ikk ${IKK_VERSION} → ${IKK_INSTALL_DIR}/ikk"
 echo "downloading ${URL}..."
@@ -48,9 +49,20 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 curl -fsSL "$URL" -o "$TMPDIR/ikk${EXT}"
 
-# download checksum
-curl -fsSL "${URL}.sha256" -o "$TMPDIR/ikk${EXT}.sha256"
-(cd "$TMPDIR" && sha256sum -c "ikk${EXT}.sha256")
+# verify against the published SHA256SUMS
+curl -fsSL "${BASE}/SHA256SUMS" -o "$TMPDIR/SHA256SUMS"
+EXPECTED=$(awk -v a="$ASSET" '$2 == a { print $1; exit }' "$TMPDIR/SHA256SUMS")
+if [ -z "$EXPECTED" ]; then
+    echo "asset ${ASSET} not found in SHA256SUMS" >&2
+    exit 1
+fi
+ACTUAL=$(sha256sum "$TMPDIR/ikk${EXT}" | awk '{ print $1 }')
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+    echo "checksum mismatch!" >&2
+    echo "  expected: $EXPECTED" >&2
+    echo "  got:      $ACTUAL" >&2
+    exit 1
+fi
 
 mkdir -p "$IKK_INSTALL_DIR"
 tar xzf "$TMPDIR/ikk${EXT}" -C "$TMPDIR"

@@ -2,7 +2,7 @@
 
 This document outlines the strategic architectural shifts required to transform `ikk-core` from a functional utility into a world-class, high-performance, and production-ready package management engine.
 
-## Status (branch `refac/core-arch`)
+## Status (branch `main`)
 
 | Item | State |
 |------|-------|
@@ -14,7 +14,7 @@ This document outlines the strategic architectural shifts required to transform 
 | §3 Flat-dir model, per-package `bin/<name>/` links | ✅ core done (junction/symlink + copy fallback) · CLI `run`/`remove` migrated |
 | ikk-cli migration | ✅ done — config round-trip fixed, CLI smoke pass complete (install/list/info/check/sync/upgrade/gc/remove/init) |
 | Integration tests | ✅ updated to new APIs |
-| §4 Release asset naming + SHA256SUMS | ⏳ release green (5 assets + `SHA256SUMS`); remaining: `score_asset` x86_64 fix, version bump, install scripts, self-update test (see REVIEW.md) |
+| §4 Release asset naming + SHA256SUMS | ⚠️ code complete: `score_asset` x86_64 fixed, crates bumped to 0.8.0, install scripts verify against `SHA256SUMS`; remaining: re-tag `v0.8.0` + end-to-end `ikk self-update` test (see REVIEW.md) |
 
 ---
 

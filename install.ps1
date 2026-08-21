@@ -15,8 +15,7 @@ if ($Arch -eq "x86") {
     exit 1
 }
 
-$Target = "${Arch}-pc-windows-msvc"
-$Ext = ".zip"
+$Asset = "ikk-windows-${Arch}.zip"
 
 # ── resolve version ────────────────────────────────────────────────────────
 if ($Version -eq "latest") {
@@ -24,7 +23,8 @@ if ($Version -eq "latest") {
     $Version = $release.tag_name
 }
 
-$Url = "https://github.com/mandeepsmagh/ikk/releases/download/${Version}/ikk-${Target}${Ext}"
+$Base = "https://github.com/mandeepsmagh/ikk/releases/download/${Version}"
+$Url = "${Base}/${Asset}"
 
 Write-Host "ikk ${Version} -> ${InstallDir}\ikk.exe"
 Write-Host "downloading ${Url}..."
@@ -35,9 +35,14 @@ $tmp = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item $_ -ItemTyp
 $zip = Join-Path $tmp "ikk.zip"
 Invoke-WebRequest -Uri $Url -OutFile $zip
 
-# verify checksum
-$hashUrl = "${Url}.sha256"
-$expected = (Invoke-RestMethod $hashUrl).Split()[0]
+# verify against the published SHA256SUMS
+$sums = (Invoke-RestMethod "${Base}/SHA256SUMS") -split "`n"
+$line = $sums | Where-Object { $_ -match [regex]::Escape($Asset) } | Select-Object -First 1
+if (-not $line) {
+    Write-Error "asset ${Asset} not found in SHA256SUMS"
+    exit 1
+}
+$expected = ($line -split '\s+')[0].ToLower()
 $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 if ($expected -ne $actual) {
     Write-Error "checksum mismatch!`n  expected: $expected`n  got:      $actual"

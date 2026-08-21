@@ -104,7 +104,12 @@ pub fn score_asset(name: &str, platform: &Platform) -> Option<u32> {
     // like "darwintools" matching "darwin".
     let tokens: Vec<&str> = name.split(['-', '_', '.']).collect();
 
-    let contains = |variant: &str| -> bool { tokens.iter().any(|t| *t == variant.to_lowercase()) };
+    // Token matching alone would split "x86_64" into "x86" + "64", so variants
+    // containing a separator also match as raw substrings of the full name.
+    let contains = |variant: &str| -> bool {
+        let v = variant.to_lowercase();
+        tokens.iter().any(|t| *t == v) || (v.contains(['-', '_', '.']) && name.contains(&v))
+    };
 
     // Pass 1: require both arch and os
     if let Some(score) = score_both(&tokens, platform, &contains) {
@@ -233,6 +238,27 @@ mod tests {
 
         let win = Platform { os: Os::Windows, arch: Arch::X86_64 };
         assert!(score_asset("ikk-windows-x86_64.zip", &win).is_some());
+    }
+
+    /// `x86_64` must score as a real arch match — not fall through to the
+    /// os-only fallback where it can tie with the wrong-arch asset.
+    #[test]
+    fn score_x86_64_beats_wrong_arch() {
+        let linux = Platform { os: Os::Linux, arch: Arch::X86_64 };
+        let x86 = score_asset("ikk-linux-x86_64.tar.gz", &linux).unwrap();
+        let arm = score_asset("ikk-linux-aarch64.tar.gz", &linux).unwrap();
+        assert!(x86 > arm, "matching arch must beat wrong arch");
+
+        let win = Platform { os: Os::Windows, arch: Arch::X86_64 };
+        let x86 = score_asset("ikk-windows-x86_64.zip", &win).unwrap();
+        let arm = score_asset("ikk-windows-aarch64.zip", &win).unwrap();
+        assert!(x86 > arm, "matching arch must beat wrong arch");
+
+        // Even if a wrong-arch asset existed, the right one must win.
+        let mac = Platform { os: Os::MacOs, arch: Arch::Aarch64 };
+        let arm = score_asset("ikk-darwin-aarch64.tar.gz", &mac).unwrap();
+        let x86 = score_asset("ikk-darwin-x86_64.tar.gz", &mac).unwrap();
+        assert!(arm > x86, "matching arch must beat wrong arch");
     }
 
     #[test]
