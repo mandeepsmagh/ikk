@@ -42,7 +42,9 @@ if ($LASTEXITCODE -ne 0) {
 
 # verify against the published SHA256SUMS
 $sums = (curl.exe -fsSL "${Base}/SHA256SUMS") -split "`n"
-$line = $sums | Where-Object { $_ -match [regex]::Escape($Asset) } | Select-Object -First 1
+$line = $sums | Where-Object {
+    ($_.Trim() -split '\s+')[-1] -eq $Asset
+} | Select-Object -First 1
 if (-not $line) {
     Write-Error "asset ${Asset} not found in SHA256SUMS"
     exit 1
