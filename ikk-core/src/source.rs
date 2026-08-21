@@ -143,7 +143,11 @@ impl Source for RemoteSource {
 
         tracing::info!("downloading {}…", asset.name);
 
-        let bytes = self.http.get(&asset.url).send().await?.bytes().await?;
+        let mut req = self.http.get(&asset.url);
+        if let Some(token) = self.remote.auth_bearer() {
+            req = req.bearer_auth(token);
+        }
+        let bytes = req.send().await?.bytes().await?;
 
         Ok(RawContent::Bytes { bytes: bytes.to_vec(), filename: asset.name.clone() })
     }

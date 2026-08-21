@@ -61,7 +61,11 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
 
     println!("upgrading ikk {current} → {}…", release.version);
 
-    let bytes = ctx.http.get(&asset.url).send().await?.bytes().await?;
+    let mut req = ctx.http.get(&asset.url);
+    if let Some(token) = remote.auth_bearer() {
+        req = req.bearer_auth(token);
+    }
+    let bytes = req.send().await?.bytes().await?;
     let actual = ikk_core::store::sha256_hex(&bytes);
 
     // Verification is fail-closed: a missing or unfetchable SHA256SUMS is a
@@ -69,7 +73,9 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
     if args.insecure {
         eprintln!("warning: --insecure — skipping checksum verification");
     } else {
-        match fetch_expected_sha256(&ctx, &url, &release.version, &asset.name).await {
+        match fetch_expected_sha256(&ctx, &url, &release.version, &asset.name, remote.auth_bearer())
+            .await
+        {
             Ok(Some(expected)) => {
                 if actual != expected {
                     bail!(
@@ -111,11 +117,16 @@ async fn fetch_expected_sha256(
     repo_url: &url::Url,
     version: &str,
     asset_name: &str,
+    token: Option<&str>,
 ) -> Result<Option<String>> {
     let base = format!("{}/releases/download/{version}", repo_url);
     let url = format!("{base}/SHA256SUMS");
 
-    let resp = ctx.http.get(&url).send().await?;
+    let mut req = ctx.http.get(&url);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await?;
 
     if !resp.status().is_success() {
         return Err(anyhow::anyhow!("{url} returned HTTP {}", resp.status()));

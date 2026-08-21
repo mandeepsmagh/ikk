@@ -29,6 +29,11 @@ pub struct Asset {
 pub trait Remote: Send + Sync {
     async fn latest(&self) -> Result<Release>;
     async fn assets(&self, version: &str) -> Result<Vec<Asset>>;
+
+    /// Bearer token for this remote's forge, if auth is configured.
+    /// `None` when unauthenticated (e.g. public repos). Asset downloads must
+    /// attach this token to reach private-repo release assets.
+    fn auth_bearer(&self) -> Option<&str>;
 }
 
 // ── config ──────────────────────────────────────────────────────────────────
@@ -200,6 +205,10 @@ impl Remote for ConfiguredRemote {
         let json = self.get_json(&url).await?;
         Ok(parse_assets(&self.config, &json))
     }
+
+    fn auth_bearer(&self) -> Option<&str> {
+        self.auth_token.as_deref()
+    }
 }
 
 // ── registry trait ──────────────────────────────────────────────────────────
@@ -224,4 +233,49 @@ pub fn owner_repo_from_url(url: &Url) -> Option<(String, String)> {
         return None;
     }
     Some((owner, repo))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(auth_env: Option<&str>) -> RemoteConfig {
+        RemoteConfig {
+            host: "github.com".into(),
+            releases_url: "https://api.github.com/repos/{owner}/{repo}/releases/latest".into(),
+            releases_version_url: None,
+            version_path: "tag_name".into(),
+            prerelease_path: "prerelease".into(),
+            draft_path: "draft".into(),
+            assets_path: "assets".into(),
+            asset_url_path: "browser_download_url".into(),
+            asset_name_path: "name".into(),
+            published_at_path: Some("published_at".into()),
+            auth_env: auth_env.map(String::from),
+        }
+    }
+
+    #[test]
+    fn auth_bearer_none_without_auth_env() {
+        let remote =
+            ConfiguredRemote::new(config(None), "o".into(), "r".into(), reqwest::Client::new());
+        assert_eq!(remote.auth_bearer(), None);
+    }
+
+    #[test]
+    fn auth_bearer_reads_env_token() {
+        // Unique var name so a parallel test can never collide with it.
+        let var = format!("IKK_TEST_TOKEN_{}", std::process::id());
+        // SAFETY: `set_var` is unsafe in edition 2024 (global env); the name
+        // above is unique to this process, and no other test reads it.
+        unsafe { std::env::set_var(&var, "sekret") };
+
+        let remote = ConfiguredRemote::new(
+            config(Some(&var)),
+            "o".into(),
+            "r".into(),
+            reqwest::Client::new(),
+        );
+        assert_eq!(remote.auth_bearer(), Some("sekret"));
+    }
 }
