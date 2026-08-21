@@ -60,7 +60,7 @@ impl Ctx {
             .timeout(std::time::Duration::from_secs(300))
             .build()?;
 
-        let registry = ConfigRegistry::new(config.remotes.clone(), http.clone());
+        let registry = ConfigRegistry::new(config.remotes.clone(), http.clone())?;
 
         Ok(Self {
             home: home.clone(),

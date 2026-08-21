@@ -5,10 +5,19 @@ use indicatif::{ProgressBar, ProgressStyle};
 /// Truncate a label to fit within a display width, appending `…` if cut.
 fn truncate_label(label: &str, max: usize) -> String {
     if label.len() <= max {
-        label.to_string()
-    } else {
-        format!("{}…", &label[..max.saturating_sub(1)])
+        return label.to_string();
     }
+
+    // Cut at the last char boundary within `max - 1` (room for the ellipsis),
+    // so a multi-byte UTF-8 label can never panic on a mid-codepoint slice.
+    let cut = label
+        .char_indices()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .take_while(|end| *end <= max.saturating_sub(1))
+        .last()
+        .unwrap_or(0);
+
+    format!("{}…", &label[..cut])
 }
 
 /// Create a progress bar or spinner for a download.
@@ -60,4 +69,16 @@ pub async fn download_bytes(http: &reqwest::Client, url: &str, label: &str) -> R
 
     bar.finish_with_message(format!("✓ {label}"));
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_label_handles_utf8_boundary() {
+        assert_eq!(truncate_label("héllo", 3), "h…");
+        assert_eq!(truncate_label("hello", 6), "hello");
+        assert_eq!(truncate_label("hello!", 5), "hell…");
+    }
 }

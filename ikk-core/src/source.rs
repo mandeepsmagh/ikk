@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::config::SecurityConfig;
 use crate::error::{IkkError, Result};
 use crate::platform::Platform;
-use crate::remote::Remote;
+use crate::remote::{Release, Remote};
 
 const LATEST: &str = "latest";
 
@@ -96,6 +96,34 @@ impl RemoteSource {
     }
 }
 
+/// Apply the release-quality and age gate to a `latest` release.
+///
+/// Shared by the real install path (`RemoteSource::version`) and the CLI's
+/// `sync --dry-run` resolution, so both resolve `latest` identically: a
+/// prerelease/draft or a too-recent release is an error, not an upgrade.
+pub fn gate_release(name: &str, security: &SecurityConfig, release: &Release) -> Result<()> {
+    if release.prerelease || release.draft {
+        return Err(IkkError::PrereleaseNotAllowed);
+    }
+
+    if !security.is_old_enough(release.published_at.as_deref()) {
+        let age_days = release
+            .published_at
+            .as_deref()
+            .and_then(crate::config::days_since_iso8601)
+            .unwrap_or(0);
+
+        return Err(IkkError::ReleaseTooRecent {
+            name: name.to_string(),
+            version: release.version.clone(),
+            age_days,
+            min_days: security.min_release_age_days,
+        });
+    }
+
+    Ok(())
+}
+
 #[async_trait]
 impl Source for RemoteSource {
     async fn version(&self, spec: &str) -> Result<String> {
@@ -104,25 +132,7 @@ impl Source for RemoteSource {
         }
 
         let release = self.remote.latest().await?;
-
-        if release.prerelease || release.draft {
-            return Err(IkkError::PrereleaseNotAllowed);
-        }
-
-        if !self.security.is_old_enough(release.published_at.as_deref()) {
-            let age_days = release
-                .published_at
-                .as_deref()
-                .and_then(crate::config::days_since_iso8601)
-                .unwrap_or(0);
-
-            return Err(IkkError::ReleaseTooRecent {
-                name: self.name.clone(),
-                version: release.version.clone(),
-                age_days,
-                min_days: self.security.min_release_age_days,
-            });
-        }
+        gate_release(&self.name, &self.security, &release)?;
 
         Ok(release.version)
     }
@@ -337,5 +347,47 @@ mod tests {
             resolve_uri_template("https://example.com/tool-1.0.tar.gz", "ignored", None).unwrap();
 
         assert_eq!(resolved, "https://example.com/tool-1.0.tar.gz");
+    }
+
+    #[test]
+    fn gate_release_blocks_prerelease() {
+        let release = crate::remote::Release {
+            version: "1.0.0".into(),
+            prerelease: true,
+            draft: false,
+            published_at: None,
+        };
+        let security = SecurityConfig { min_release_age_days: 0 };
+        assert!(matches!(
+            gate_release("foo", &security, &release),
+            Err(IkkError::PrereleaseNotAllowed)
+        ));
+    }
+
+    #[test]
+    fn gate_release_blocks_too_recent() {
+        let release = crate::remote::Release {
+            version: "1.0.0".into(),
+            prerelease: false,
+            draft: false,
+            published_at: Some("2099-01-01T00:00:00Z".into()),
+        };
+        let security = SecurityConfig { min_release_age_days: 365 };
+        assert!(matches!(
+            gate_release("foo", &security, &release),
+            Err(IkkError::ReleaseTooRecent { .. })
+        ));
+    }
+
+    #[test]
+    fn gate_release_allows_stable_old() {
+        let release = crate::remote::Release {
+            version: "1.0.0".into(),
+            prerelease: false,
+            draft: false,
+            published_at: Some("2024-01-01T00:00:00Z".into()),
+        };
+        let security = SecurityConfig { min_release_age_days: 3 };
+        assert!(gate_release("foo", &security, &release).is_ok());
     }
 }

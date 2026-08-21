@@ -39,7 +39,7 @@ async fn pinned_version() {
         sha256: None,
     };
 
-    let registry = ConfigRegistry::new(vec![], reqwest::Client::new());
+    let registry = ConfigRegistry::new(vec![], reqwest::Client::new()).unwrap();
     let http = reqwest::Client::new();
     let security = SecurityConfig::default();
 
@@ -81,7 +81,7 @@ async fn latest_version() {
         sha256: None,
     };
 
-    let registry = ConfigRegistry::new(vec![], reqwest::Client::new());
+    let registry = ConfigRegistry::new(vec![], reqwest::Client::new()).unwrap();
     let http = reqwest::Client::new();
     let security = SecurityConfig::default();
 

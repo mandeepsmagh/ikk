@@ -24,10 +24,14 @@ impl ConfigRegistry {
     /// Built-in defaults are always loaded first;
     /// user entries appended — later entries win on same host.
     /// Logs a warning if the same host appears multiple times in the user config.
-    #[must_use]
-    pub fn new(user_remotes: Vec<RemoteConfig>, http: reqwest::Client) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compiled-in `remotes.toml` fails to parse —
+    /// which can only happen if the built-in data is malformed (a build bug).
+    pub fn new(user_remotes: Vec<RemoteConfig>, http: reqwest::Client) -> Result<Self> {
         let defaults: RemotesFile = toml::from_str(DEFAULT_REMOTES)
-            .expect("built-in remotes.toml is invalid — this is a bug");
+            .map_err(|e| IkkError::Toml(format!("built-in remotes.toml: {e}")))?;
 
         let mut remotes = defaults.remotes;
 
@@ -42,7 +46,7 @@ impl ConfigRegistry {
         }
 
         remotes.extend(user_remotes);
-        Self { remotes, http }
+        Ok(Self { remotes, http })
     }
 
     fn find(&self, host: &str) -> Option<&RemoteConfig> {

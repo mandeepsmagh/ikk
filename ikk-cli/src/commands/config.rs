@@ -67,9 +67,7 @@ fn run_set(args: SetArgs, home: &IkkHome) -> Result<()> {
             config.defaults.remote = Some(args.value.clone());
         }
         "defaults.self_update_repo" => {
-            if !args.value.matches('/').count() == 1 || args.value.trim().is_empty() {
-                bail!("value must be in owner/repo form (got '{}')", args.value);
-            }
+            validate_self_update_repo(&args.value)?;
             config.defaults.self_update_repo = args.value.clone();
         }
         "security.min_release_age_days" => {
@@ -84,6 +82,14 @@ fn run_set(args: SetArgs, home: &IkkHome) -> Result<()> {
 
     config.save(&home.config_file())?;
     println!("set {} = {}", args.key, args.value);
+    Ok(())
+}
+
+/// Validate the `owner/repo` shape of a self-update repo value.
+fn validate_self_update_repo(value: &str) -> Result<()> {
+    if value.matches('/').count() != 1 || value.trim().is_empty() {
+        bail!("value must be in owner/repo form (got '{}')", value);
+    }
     Ok(())
 }
 
@@ -102,4 +108,30 @@ fn run_show_all(home: &IkkHome) -> Result<()> {
         println!("remotes                       {}", hosts.join(", "));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_self_update_repo_accepts_owner_repo() {
+        assert!(validate_self_update_repo("mandeepsmagh/ikk").is_ok());
+    }
+
+    #[test]
+    fn validate_self_update_repo_rejects_no_slash() {
+        assert!(validate_self_update_repo("not-a-repo").is_err());
+    }
+
+    #[test]
+    fn validate_self_update_repo_rejects_multiple_slashes() {
+        assert!(validate_self_update_repo("a/b/c").is_err());
+    }
+
+    #[test]
+    fn validate_self_update_repo_rejects_empty() {
+        assert!(validate_self_update_repo("").is_err());
+        assert!(validate_self_update_repo("   ").is_err());
+    }
 }

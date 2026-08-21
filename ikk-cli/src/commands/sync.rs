@@ -85,7 +85,7 @@ async fn sync_package_dry(
     let Some(locked) = locked else { return Ok(None) };
 
     // Which version would this package resolve to right now?
-    let resolved = resolve_version_dry(pkg, &ctx.config, &ctx.registry).await?;
+    let resolved = resolve_version_dry(name, pkg, &ctx.config, &ctx.registry).await?;
 
     match resolved {
         Some(resolved) if resolved != locked.version => {
@@ -99,6 +99,7 @@ async fn sync_package_dry(
 /// downloading. `Ok(None)` = not determinable (e.g. local source, template
 /// source without a version pin) — the caller reports "already in sync".
 async fn resolve_version_dry(
+    name: &str,
     pkg: &PackageConfig,
     config: &ikk_core::config::Config,
     registry: &impl RemoteRegistry,
@@ -108,14 +109,15 @@ async fn resolve_version_dry(
 
     match mode {
         // Remote: query the registry for the latest (or validate the pin).
+        // Apply the same release gate as a real install, so dry-run reports
+        // the version a real sync would install — and fails on prereleases
+        // and too-recent releases instead of pretending they'd upgrade.
         PackageMode::Remote => {
             let url = config.resolve_uri(&pkg.uri)?;
             let remote = registry.remote_for(&url)?;
             if spec == "latest" {
                 let release = remote.latest().await?;
-                if release.prerelease || release.draft {
-                    return Ok(None);
-                }
+                ikk_core::source::gate_release(name, &config.security, &release)?;
                 Ok(Some(release.version))
             } else {
                 Ok(Some(spec.to_string()))

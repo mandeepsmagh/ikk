@@ -29,11 +29,13 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
             anyhow::bail!("package '{name}' not found in config");
         };
 
-        // Skip pinned versions unless --force was supplied.
-        if pkg.version.as_deref() != Some("latest") && !args.force {
+        // Skip explicitly-pinned versions unless --force was supplied.
+        // An unset version (None) means "latest", same as "latest" — only a
+        // concrete non-latest pin is skipped.
+        if skip_pinned(&pkg, args.force) {
             println!(
                 "  {name} pinned at {} — skipping (use --force to override)",
-                pkg.version.as_deref().unwrap_or("?")
+                pkg.version.as_deref().unwrap_or("latest")
             );
             continue;
         }
@@ -114,4 +116,48 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Whether a package should be skipped during `upgrade`: it is explicitly
+/// pinned to a concrete (non-`latest`) version and `--force` was not given.
+/// A package with no `version` field means "latest" and is never skipped.
+fn skip_pinned(pkg: &ikk_core::config::PackageConfig, force: bool) -> bool {
+    !force && matches!(pkg.version.as_deref(), Some(v) if v != "latest")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ikk_core::config::PackageConfig;
+
+    fn pkg(version: Option<&str>) -> PackageConfig {
+        PackageConfig {
+            uri: "owner/repo".into(),
+            version: version.map(String::from),
+            variant: None,
+            build: None,
+            sha256: None,
+        }
+    }
+
+    #[test]
+    fn skip_pinned_skips_concrete_pin() {
+        assert!(skip_pinned(&pkg(Some("14.1.1")), false));
+    }
+
+    #[test]
+    fn skip_pinned_force_overrides() {
+        assert!(!skip_pinned(&pkg(Some("14.1.1")), true));
+    }
+
+    #[test]
+    fn skip_pinned_latest_is_not_skipped() {
+        assert!(!skip_pinned(&pkg(Some("latest")), false));
+    }
+
+    #[test]
+    fn skip_pinned_unset_version_is_not_skipped() {
+        // A package with no version field means "latest".
+        assert!(!skip_pinned(&pkg(None), false));
+    }
 }

@@ -167,8 +167,12 @@ impl Drop for CleanupFile {
 
 #[cfg(target_os = "macos")]
 fn attach_dmg(dmg_path: &Path) -> Result<String> {
+    let dmg_str = dmg_path.to_str().ok_or_else(|| {
+        IkkError::Store(format!("dmg path is not valid UTF-8: {}", dmg_path.display()))
+    })?;
+
     let out = std::process::Command::new("hdiutil")
-        .args(["attach", "-nobrowse", "-quiet", dmg_path.to_str().unwrap()])
+        .args(["attach", "-nobrowse", "-quiet", dmg_str])
         .output()?;
 
     if !out.status.success() {

@@ -1,5 +1,26 @@
 # REVIEW
 
+## Follow-up Review (2026-08-21) — closed
+
+**Verdict:** S-tier. The two CLI logic bugs and the dry-run honesty gap found in the prior review are fixed; input-dependent `.unwrap()`/`.expect()` calls removed; CLI now has test coverage. All gates green (62 core + 8 CLI tests).
+
+Fixed:
+
+1. ✅ `config set defaults.self_update_repo` validation was a no-op (`!count == 1` → always false) — now requires exactly one `/`.
+2. ✅ `ikk upgrade` skipped packages with no `version` field — now only concrete non-`latest` pins are skipped.
+3. ✅ `sync --dry-run` now applies the release age/quality gate (shared `gate_release`), matching a real sync.
+4. ✅ Removed input-dependent `.unwrap()`/`.expect()`: `attach_dmg` path, `ConfigRegistry::new` (now fallible), `single_executable`.
+5. ✅ Latent bugs: `find_all` dash-name cross-match, `truncate_label` UTF-8 slice panic, non-atomic `ikk.toml` save.
+6. ✅ 8 CLI tests added (`config`, `upgrade`) + core tests for `gate_release`, `find_all`, `truncate_label`.
+
+### Deferred (unchanged)
+
+- Live `ikk self-update` e2e — repo `mandeepsmagh/ikk` is private (GitHub API 404).
+- No `windows-arm64` / `linux-musl` release assets.
+- Optional: length-prefix lockfile Merkle leaves + `hash_dir`; progress bar on forge downloads.
+
+---
+
 ## S-tier Review (2026-07-11, full codebase) — closed 2026-07-11
 
 **Verdict:** A+ / near-S-tier. Architecture, testing (57 core tests), and security fundamentals are production-grade. Gaps were all in the seams — a day or two of work, nothing structural.

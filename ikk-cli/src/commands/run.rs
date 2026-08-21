@@ -78,10 +78,7 @@ fn find_binary(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> 
 fn single_executable(root: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut found: Vec<std::path::PathBuf> = Vec::new();
     collect_executables(root, &mut found);
-    match found.len() {
-        1 => Some(found.pop().unwrap()),
-        _ => None,
-    }
+    if found.len() == 1 { found.pop() } else { None }
 }
 
 fn collect_executables(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

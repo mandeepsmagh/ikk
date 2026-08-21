@@ -16,6 +16,7 @@ This document outlines the strategic architectural shifts required to transform 
 | Integration tests | ✅ updated to new APIs |
 | §4 Release asset naming + SHA256SUMS | ✅ done — asset naming, `SHA256SUMS`, `score_asset` x86_64, 0.8.0 bump, install scripts; live `self-update` e2e deferred (repo private → API 404) |
 | §5 S-tier review gaps | ✅ all 9 fixed — `AuthConfig` deleted, fail-closed self-update checksum (+`--insecure`), honest `sync --dry-run`, `upgrade` failure summary, `gc` store lock, UA from `CARGO_PKG_VERSION`, mode-bit exec check, `config get/set defaults.self_update_repo`, `install.ps1` on `curl.exe` |
+| Follow-up review (2026-08-21) | ✅ done — self-update-repo validation no-op fixed, `upgrade` skipped `None`-version pkgs fixed, dry-run age gate shared via `gate_release`, input-dependent `.unwrap()`/`.expect()` removed (`registry`, `attach_dmg`, `run`), `find_all`/`truncate_label` latent bugs fixed, atomic `ikk.toml` save, 8 CLI tests added |
 
 ---
 

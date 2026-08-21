@@ -85,19 +85,24 @@ impl Store {
     }
 
     /// Find all store entries matching a package name.
+    ///
+    /// Matches on the recorded package name in `meta.toml`, not on the
+    /// directory name — package names containing dashes would otherwise
+    /// cross-match (e.g. `foo` matching `foo-bar`).
     #[must_use]
     pub fn find_all(&self, name: &str) -> Vec<StorePath> {
-        let prefix = format!("-{name}-");
         let mut results: Vec<StorePath> = std::fs::read_dir(&self.root)
             .into_iter()
             .flatten()
             .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().contains(&prefix))
             .filter_map(|e| {
                 let path = e.path();
                 let entry_name = e.file_name().to_string_lossy().to_string();
                 let meta: StoreMeta =
                     toml::from_str(&std::fs::read_to_string(path.join("meta.toml")).ok()?).ok()?;
+                if meta.name != name {
+                    return None;
+                }
                 Some(StorePath {
                     hash: meta.content_sha256.clone(),
                     name: meta.name.clone(),
@@ -416,6 +421,26 @@ mod tests {
 
         let results = store.verify_all().unwrap();
         assert!(matches!(results[0], VerifyResult::Tampered { .. }));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn find_all_does_not_cross_match_dashed_names() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_findall_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("tool"), b"binary").unwrap();
+
+        let store = Store::open(tmp.join("store")).unwrap();
+        store.insert("foo", "1.0", None, &artifact(&src)).unwrap();
+        store.insert("foo-bar", "1.0", None, &artifact(&src)).unwrap();
+
+        assert_eq!(store.find_all("foo").len(), 1);
+        assert_eq!(store.find_all("foo-bar").len(), 1);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

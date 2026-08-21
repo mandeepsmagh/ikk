@@ -220,7 +220,12 @@ impl Config {
         let contents =
             toml::to_string_pretty(self).map_err(|e| IkkError::Toml(format!("serialize: {e}")))?;
 
-        std::fs::write(path, contents)?;
+        // Atomic write (temp → rename) so a crash mid-save never leaves a
+        // truncated ikk.toml — matching ikk.lock and meta.toml.
+        let pid = std::process::id();
+        let tmp = path.with_extension(format!("toml.{pid}.tmp"));
+        std::fs::write(&tmp, contents)?;
+        std::fs::rename(&tmp, path)?;
         Ok(())
     }
 
