@@ -1,20 +1,20 @@
 # REVIEW
 
-## S-tier Review (2026-07-11, full codebase)
+## S-tier Review (2026-07-11, full codebase) — closed 2026-07-11
 
-**Verdict:** A+ / near-S-tier. Architecture, testing (57 core tests), and security fundamentals are production-grade. Gaps are all in the seams — a day or two of work, nothing structural.
+**Verdict:** A+ / near-S-tier. Architecture, testing (57 core tests), and security fundamentals are production-grade. Gaps were all in the seams — a day or two of work, nothing structural.
 
-### Gaps (fix to reach S-tier)
+### Gaps (all fixed)
 
-1. **Dead code: `AuthConfig`** — `config.auth` (tokens, `ssh_key`, `ssh_passphrase_env`) in `ikk-core/src/config.rs` is parsed and serialized but used by nothing. Only `RemoteConfig.auth_env` is a real auth path, and the `auth` section has no CLI surface. Either wire it up or delete it.
-2. **`self_update` checksum is not fail-closed** — `ikk-cli/src/commands/self_update.rs`: if `SHA256SUMS` is missing or the fetch fails, it prints "skipping verification" and installs anyway. A MITM that strips the checksum file gets a free pass. Make missing checksums a hard error (or require `--insecure` to proceed).
-3. **`sync --dry-run` is a lie** — `ikk-cli/src/commands/sync.rs`: prints "would sync X" for every package without checking whether it's outdated, and never reports what `remove_stale` would remove. A dry run must answer "what will change?"
-4. **`upgrade` aborts on first failure** — `ikk-cli/src/commands/upgrade.rs`: first error stops the whole loop via `?`, no summary. `sync` collects failures and reports at the end; `upgrade` should match that behavior.
-5. **`gc` skips the store lock** — `ikk-cli/src/commands/gc.rs`: deletes store entries via `Ctx::load_readonly`. Concurrent install could link an entry gc just deleted. Use `Ctx::load`.
-6. **Stale hardcoded user agent** — `ikk-core/src/remote.rs` `get_json` sets `USER_AGENT: "ikk/0.7"` while `Ctx` builds a client with the real `CARGO_PKG_VERSION`. Two sources of truth; the hardcoded one is stale.
-7. **`run.rs` executable heuristic** — `is_executable` (no dots = executable on Unix) misfires on `LICENSE`, `Makefile`, etc. A mode-bit check would be correct.
-8. **`config get/set` coverage** — only knows `defaults.remote` and `security.min_release_age_days`. `defaults.self_update_repo` isn't settable via CLI even though docs tell users to "edit that one line in ikk.toml".
-9. **`install.ps1` uses `Invoke-WebRequest`** — deprecated in PowerShell 7+; prefer `curl.exe` or `Invoke-RestMethod`.
+1. ✅ **Dead code: `AuthConfig`** — deleted from `ikk-core/src/config.rs`. `RemoteConfig.auth_env` remains the only auth path.
+2. ✅ **`self_update` checksum is now fail-closed** — `SHA256SUMS` missing/unfetchable or asset absent from the file → hard error; `--insecure` opts out with a warning.
+3. ✅ **`sync --dry-run` answers "what will change?"** — reports would install / reinstall (config changed) / upgrade (lock vs resolved version) / remove (stale), errors collected like a real run.
+4. ✅ **`upgrade` collects failures** — one broken package no longer aborts the rest; summary printed at the end, non-zero exit on any failure.
+5. ✅ **`gc` holds the store lock** — `Ctx::load` for the destructive path, `load_readonly` for `--dry-run`.
+6. ✅ **User agent from `CARGO_PKG_VERSION`** — `remote.rs` `get_json` no longer hardcodes `ikk/0.7`.
+7. ✅ **`run.rs` mode-bit check** — Unix `is_executable` checks `0o111` mode bits (plus `is_file`) instead of the no-dots heuristic; Windows matches `.exe/.bat/.cmd`.
+8. ✅ **`config get/set defaults.self_update_repo`** — settable via CLI (validated as `owner/repo`), shown by bare `ikk config`.
+9. ✅ **`install.ps1` uses `curl.exe`** — for both the asset and `SHA256SUMS`; `Invoke-RestMethod` kept only for the GitHub API call (not deprecated).
 
 ### Deferred (low risk, from prior review)
 

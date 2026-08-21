@@ -90,9 +90,7 @@ fn collect_executables(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>)
             let path = entry.path();
             if path.is_dir() {
                 collect_executables(&path, out);
-            } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && is_executable(name)
-            {
+            } else if is_executable(&path) {
                 out.push(path);
             }
         }
@@ -106,23 +104,29 @@ fn list_binaries(dir: &std::path::Path) -> Vec<String> {
             let path = entry.path();
             if path.is_dir() {
                 names.extend(list_binaries(&path));
-            } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && is_executable(name)
-            {
-                names.push(format!("  {name}"));
+            } else if is_executable(&path) {
+                names.push(format!("  {}", path.display()));
             }
         }
     }
     names
 }
 
-/// Heuristic: does this filename look like a standalone executable?
+/// Is this file an executable? Mode bits on Unix, known script/binary
+/// extensions on Windows.
 #[cfg(unix)]
-fn is_executable(name: &str) -> bool {
-    !name.contains('.') && !name.starts_with('.')
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
-fn is_executable(name: &str) -> bool {
-    name.ends_with(".exe") || name.ends_with(".bat") || name.ends_with(".cmd")
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd"))
 }

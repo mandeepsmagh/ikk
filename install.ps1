@@ -33,10 +33,15 @@ Write-Host "downloading ${Url}..."
 $tmp = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item $_ -ItemType Directory }
 
 $zip = Join-Path $tmp "ikk.zip"
-Invoke-WebRequest -Uri $Url -OutFile $zip
+# curl.exe ships with Windows 10+ (and PowerShell 7 on older versions).
+curl.exe -fsSL --retry 3 -o $zip $Url
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "download failed: $Url"
+    exit 1
+}
 
 # verify against the published SHA256SUMS
-$sums = (Invoke-RestMethod "${Base}/SHA256SUMS") -split "`n"
+$sums = (curl.exe -fsSL "${Base}/SHA256SUMS") -split "`n"
 $line = $sums | Where-Object { $_ -match [regex]::Escape($Asset) } | Select-Object -First 1
 if (-not $line) {
     Write-Error "asset ${Asset} not found in SHA256SUMS"

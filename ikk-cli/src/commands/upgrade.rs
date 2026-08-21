@@ -22,6 +22,7 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
     };
 
     let mut any_change = false;
+    let mut failed = vec![];
 
     for name in &names {
         let Some(pkg) = ctx.config.packages.get(name).cloned() else {
@@ -47,29 +48,44 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
             home: &ctx.home,
         };
 
-        match ctx.config.package_mode(&pkg) {
-            PackageMode::Remote => {
-                let url = ctx.config.resolve_uri(&pkg.uri)?;
-                let remote = ctx.registry.remote_for(&url)?;
+        // Collect failures and keep going — one broken package should not
+        // stop the rest from upgrading (matches `sync` behavior).
+        // (An async block borrows `ctx` for the whole await, so the borrow
+        // ends before the result is handled below.)
+        let result: anyhow::Result<()> = async {
+            let req = &req;
+            match ctx.config.package_mode(&pkg) {
+                PackageMode::Remote => {
+                    let url = ctx.config.resolve_uri(&pkg.uri)?;
+                    let remote = ctx.registry.remote_for(&url)?;
 
-                ops::install(
-                    &req,
-                    remote,
-                    &ctx.http,
-                    &ctx.config.security,
-                    &ctx.store,
-                    &mut ctx.lock,
-                )
-                .await?;
+                    ops::install(
+                        req,
+                        remote,
+                        &ctx.http,
+                        &ctx.config.security,
+                        &ctx.store,
+                        &mut ctx.lock,
+                    )
+                    .await?;
+                }
+
+                PackageMode::Template => {
+                    ops::install_template(req, &ctx.http, &ctx.store, &mut ctx.lock).await?;
+                }
+
+                PackageMode::Local => {
+                    ops::install_local(req, &ctx.store, &mut ctx.lock).await?;
+                }
             }
 
-            PackageMode::Template => {
-                ops::install_template(&req, &ctx.http, &ctx.store, &mut ctx.lock).await?;
-            }
+            Ok(())
+        }
+        .await;
 
-            PackageMode::Local => {
-                ops::install_local(&req, &ctx.store, &mut ctx.lock).await?;
-            }
+        if let Err(e) = result {
+            failed.push((name.clone(), e.to_string()));
+            continue;
         }
 
         let after = ctx.lock.get(name).map(|locked| locked.version.clone());
@@ -88,6 +104,13 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
 
     if any_change {
         ctx.lock.save(&home.lock_file())?;
+    }
+
+    if !failed.is_empty() {
+        for (name, err) in &failed {
+            eprintln!("  error {name}: {err}");
+        }
+        anyhow::bail!("{} package(s) failed to upgrade", failed.len());
     }
 
     Ok(())

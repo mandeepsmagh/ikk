@@ -31,9 +31,6 @@ pub struct Config {
     pub security: SecurityConfig,
 
     #[serde(default)]
-    pub auth: AuthConfig,
-
-    #[serde(default)]
     pub store: StoreConfig,
 
     #[serde(default)]
@@ -169,39 +166,6 @@ fn is_local_uri(uri: &str) -> bool {
         || Path::new(uri).is_absolute()
 }
 
-// ── auth ────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct AuthConfig {
-    #[serde(default)]
-    pub tokens: BTreeMap<String, TokenConfig>,
-
-    pub ssh_key: Option<PathBuf>,
-
-    pub ssh_passphrase_env: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenConfig {
-    pub env: String,
-}
-
-impl AuthConfig {
-    #[must_use]
-    pub fn token_for(&self, host: &str) -> Option<String> {
-        self.tokens.get(host).and_then(|token| std::env::var(&token.env).ok())
-    }
-
-    #[must_use]
-    pub fn ssh_key_path(&self) -> Option<PathBuf> {
-        if let Some(key) = &self.ssh_key {
-            return Some(key.clone());
-        }
-
-        dirs::home_dir().map(|home| home.join(".ssh").join("id_ed25519"))
-    }
-}
-
 // ── store ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -225,7 +189,6 @@ impl Config {
 
         let defaults = deserialize_section(&raw, "defaults")?;
         let security = deserialize_section(&raw, "security")?;
-        let auth = deserialize_section(&raw, "auth")?;
         let store = deserialize_section(&raw, "store")?;
         let remotes = deserialize_section::<Vec<RemoteConfig>>(&raw, "remotes")?;
 
@@ -246,7 +209,7 @@ impl Config {
             }
         }
 
-        Ok(Self { defaults, security, auth, store, remotes, packages })
+        Ok(Self { defaults, security, store, remotes, packages })
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {

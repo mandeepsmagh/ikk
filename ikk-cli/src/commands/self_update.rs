@@ -15,6 +15,10 @@ pub struct SelfUpdateArgs {
     /// Only check if an update is available
     #[arg(long, short)]
     pub check: bool,
+
+    /// Skip checksum verification (never do this on untrusted networks)
+    #[arg(long)]
+    pub insecure: bool,
 }
 
 pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
@@ -60,19 +64,37 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
     let bytes = ctx.http.get(&asset.url).send().await?.bytes().await?;
     let actual = ikk_core::store::sha256_hex(&bytes);
 
-    // Verify against the published checksum file when available.
-    if let Ok(Some(expected)) =
-        fetch_expected_sha256(&ctx, &url, &release.version, &asset.name).await
-    {
-        if actual != expected {
-            bail!(
-                "checksum mismatch for ikk {}\n  expected: {expected}\n  got:      {actual}\n  \
-                 This may indicate a supply chain attack. Aborting.",
-                release.version
-            );
-        }
+    // Verification is fail-closed: a missing or unfetchable SHA256SUMS is a
+    // hard error unless --insecure was passed.
+    if args.insecure {
+        eprintln!("warning: --insecure — skipping checksum verification");
     } else {
-        eprintln!("note: no published checksum found — skipping verification");
+        match fetch_expected_sha256(&ctx, &url, &release.version, &asset.name).await {
+            Ok(Some(expected)) => {
+                if actual != expected {
+                    bail!(
+                        "checksum mismatch for ikk {}\n  expected: {expected}\n  got:      \
+                         {actual}\n  This may indicate a supply chain attack. Aborting.",
+                        release.version
+                    );
+                }
+            }
+            Ok(None) => {
+                bail!(
+                    "no published checksum for ikk {} ({}) — refusing to install \
+                     unverified. Re-run with --insecure to override.",
+                    release.version,
+                    asset.name
+                );
+            }
+            Err(e) => {
+                bail!(
+                    "could not fetch SHA256SUMS for ikk {}: {e} — refusing to install \
+                     unverified. Re-run with --insecure to override.",
+                    release.version
+                );
+            }
+        }
     }
 
     replace_binary(&bytes).context("failed to replace the ikk binary")?;
@@ -82,7 +104,8 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
 }
 
 /// Fetch `{repo}/releases/download/{version}/SHA256SUMS` and return the hash
-/// for `asset_name`, if the file exists.
+/// for `asset_name`, if the file exists. Any fetch or HTTP failure is a hard
+/// error (verification is fail-closed).
 async fn fetch_expected_sha256(
     ctx: &Ctx,
     repo_url: &url::Url,
@@ -92,12 +115,10 @@ async fn fetch_expected_sha256(
     let base = format!("{}/releases/download/{version}", repo_url);
     let url = format!("{base}/SHA256SUMS");
 
-    let Ok(resp) = ctx.http.get(&url).send().await else {
-        return Ok(None);
-    };
+    let resp = ctx.http.get(&url).send().await?;
 
     if !resp.status().is_success() {
-        return Ok(None);
+        return Err(anyhow::anyhow!("{url} returned HTTP {}", resp.status()));
     }
 
     for line in String::from_utf8_lossy(&resp.bytes().await?).lines() {

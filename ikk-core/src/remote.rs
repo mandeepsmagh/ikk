@@ -93,7 +93,9 @@ impl ConfiguredRemote {
         if let Some(ref token) = self.auth_token {
             req = req.bearer_auth(token);
         }
-        req = req.header(reqwest::header::USER_AGENT, "ikk/0.7");
+        // The user agent comes from the shared HTTP client (built with
+        // `CARGO_PKG_VERSION` in the CLI) — don't hardcode a second one here.
+        req = req.header(reqwest::header::USER_AGENT, format!("ikk/{}", env!("CARGO_PKG_VERSION")));
 
         let resp = req.send().await?.error_for_status()?;
         let json: Value = resp.json().await?;

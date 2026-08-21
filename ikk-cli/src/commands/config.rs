@@ -45,6 +45,9 @@ fn run_get(args: GetArgs, home: &IkkHome) -> Result<()> {
         "defaults.remote" => {
             println!("{}", config.defaults.remote.as_deref().unwrap_or("(not set)"));
         }
+        "defaults.self_update_repo" => {
+            println!("{}", config.defaults.self_update_repo);
+        }
         "security.min_release_age_days" => {
             println!("{}", config.security.min_release_age_days);
         }
@@ -62,6 +65,12 @@ fn run_set(args: SetArgs, home: &IkkHome) -> Result<()> {
     match args.key.as_str() {
         "defaults.remote" => {
             config.defaults.remote = Some(args.value.clone());
+        }
+        "defaults.self_update_repo" => {
+            if !args.value.matches('/').count() == 1 || args.value.trim().is_empty() {
+                bail!("value must be in owner/repo form (got '{}')", args.value);
+            }
+            config.defaults.self_update_repo = args.value.clone();
         }
         "security.min_release_age_days" => {
             let days: u64 =
@@ -85,6 +94,7 @@ fn run_show_all(home: &IkkHome) -> Result<()> {
         "defaults.remote               {}",
         config.defaults.remote.as_deref().unwrap_or("(not set)")
     );
+    println!("defaults.self_update_repo     {}", config.defaults.self_update_repo);
     println!("security.min_release_age_days {}", config.security.min_release_age_days);
     println!("packages                      {} configured", config.packages.len());
     if !config.remotes.is_empty() {

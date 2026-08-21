@@ -11,7 +11,9 @@ pub struct GcArgs {
 }
 
 pub fn run(args: GcArgs, home: &IkkHome) -> Result<()> {
-    let ctx = Ctx::load_readonly(home)?;
+    // Deletion mutates the store, so hold the exclusive store lock — a
+    // concurrent install could otherwise link an entry we just removed.
+    let ctx = if args.dry_run { Ctx::load_readonly(home)? } else { Ctx::load(home)? };
 
     let store_dir = ctx.store.root().to_path_buf();
     let mut kept = 0;
