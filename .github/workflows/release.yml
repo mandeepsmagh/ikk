@@ -97,12 +97,53 @@ jobs:
       # `ikk self-update` verifies against (`<hash>  <name>` format).
       - name: Build SHA256SUMS
         run: |
-          cat artifacts/*.sha256 | sort -k2 > SHA256SUMS
+          # Windows writes CRLF; normalise to LF so the manifest is clean for
+          # `sha256sum -c` and any verifier.
+          cat artifacts/*.sha256 | tr -d '\r' | sort -k2 > SHA256SUMS
           cat SHA256SUMS
           # GitHub rejects zero-byte release assets; fail fast here instead.
           test -s SHA256SUMS
           # sanity check: one line per built asset
           test "$(wc -l < SHA256SUMS)" -eq 6
+
+      # Fail-closed gate: verify the manifest and run the built binary through
+      # the full CLI lifecycle. If anything fails, no release is created.
+      - name: Verify checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum -c ../SHA256SUMS
+
+      - name: E2E smoke (built binary)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ikk-smoke
+          tar xzf artifacts/ikk-linux-x86_64.tar.gz -C /tmp/ikk-smoke
+          IKK=/tmp/ikk-smoke/ikk
+          "$IKK" --version
+
+          export IKK_HOME="$(mktemp -d)/.ikk"
+          "$IKK" init --silent --no-shell
+
+          # local single-file package through the full lifecycle
+          mkdir -p /tmp/ikk-smoke-pkg
+          printf '#!/bin/sh\necho ikk-smoke-ok\n' > /tmp/ikk-smoke-pkg/tool
+          chmod +x /tmp/ikk-smoke-pkg/tool
+          "$IKK" install tool --uri "file:///tmp/ikk-smoke-pkg/tool"
+          "$IKK" list
+          "$IKK" info tool
+          "$IKK" check
+          "$IKK" run tool
+          "$IKK" upgrade
+          "$IKK" gc --dry-run
+          "$IKK" remove tool
+          "$IKK" uninstall --yes
+
+          # real forge install (network)
+          "$IKK" init --silent --no-shell --remote github.com
+          "$IKK" install ripgrep --uri BurntSushi/ripgrep --version 14.1.1
+          "$IKK" check
+          "$IKK" uninstall --yes
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
