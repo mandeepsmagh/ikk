@@ -1,5 +1,15 @@
 # REVIEW
 
+## macOS release asset fix (2026-08-22)
+
+**Found:** the published macOS assets (arm64 + x86_64) were dynamically linked against Homebrew's `liblzma` (`/opt/homebrew/opt/xz/lib/liblzma.5.dylib`). The GitHub `macos-latest` runner ships Homebrew `xz`, so `lzma-sys` linked against it and baked the Homebrew path into the binary. On any Mac without Homebrew `xz` at that path the binary crashes at launch: `dyld: Library not loaded: /opt/homebrew/opt/xz/lib/liblzma.5.dylib`.
+
+**Fixed:** `xz2` now builds with `features = ["static"]` (compiles liblzma from source, statically linked). Verified: the release binary depends only on macOS system frameworks, runs, and `.tar.xz` extraction still works (new regression test `extracts_tar_xz`).
+
+**Note:** the already-published `v0.8.2` assets still carry the old dynamic link — a new release (`v0.8.3`) is required to ship fixed binaries.
+
+---
+
 ## Live self-update e2e (2026-08-22) — closed
 
 Repo made public. Live unauthenticated e2e passes: `ikk self-update --check` → `ikk is up to date (0.8.2)`; asset + `SHA256SUMS` download verified (checksum match) over plain HTTPS. This closes the long-deferred §4 gate.

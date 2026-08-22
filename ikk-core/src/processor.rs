@@ -241,6 +241,22 @@ mod tests {
         gz.finish().unwrap()
     }
 
+    fn tar_xz_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, data) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o755);
+            ar.append_data(&mut h, name, *data).unwrap();
+        }
+        let tar = ar.into_inner().unwrap();
+
+        let mut xz = xz2::write::XzEncoder::new(Vec::new(), 6);
+        use std::io::Write;
+        xz.write_all(&tar).unwrap();
+        xz.finish().unwrap()
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ikk_test_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -268,6 +284,17 @@ mod tests {
         let root = extract_dir(&bytes, "ripgrep.tar.gz", &dir).unwrap();
         assert!(root.join("rg").exists());
         assert!(root.join("share/doc").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extracts_tar_xz() {
+        let bytes = tar_xz_with_files(&[("tool/bin/tool", b"binary")]);
+        let dir = temp_dir("xz");
+
+        let root = extract_dir(&bytes, "tool.tar.xz", &dir).unwrap();
+        assert!(root.join("bin/tool").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

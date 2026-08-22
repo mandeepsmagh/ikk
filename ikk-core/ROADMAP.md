@@ -19,6 +19,7 @@ This document outlines the strategic architectural shifts required to transform 
 | Follow-up review (2026-08-21) | ✅ done — self-update-repo validation no-op fixed, `upgrade` skipped `None`-version pkgs fixed, dry-run age gate shared via `gate_release`, input-dependent `.unwrap()`/`.expect()` removed (`registry`, `attach_dmg`, `run`), `find_all`/`truncate_label` latent bugs fixed, atomic `ikk.toml` save, 8 CLI tests added |
 | S-tier re-review fixes (2026-08-22) | ✅ done — `gc` skips `.lock`/meta-less entries, symlink-preserving `copy_dir_contents`, package-name validation (data-loss closed), `upgrade --force` resolves `latest`, bash rc path unified, forge downloads streamed, `self-update` `github.com` fallback |
 | Live self-update e2e (2026-08-22) | ✅ done — repo public; unauthenticated `--check` + asset/`SHA256SUMS` verified; fixed `v`-prefix version comparison |
+| macOS static `liblzma` (2026-08-22) | ✅ done — `xz2` `static` feature; macOS assets self-contained (no Homebrew dylib); `v0.8.3` release required to ship |
 
 ---
 
