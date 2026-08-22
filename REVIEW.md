@@ -1,5 +1,13 @@
 # REVIEW
 
+## Live self-update e2e (2026-08-22) — closed
+
+Repo made public. Live unauthenticated e2e passes: `ikk self-update --check` → `ikk is up to date (0.8.2)`; asset + `SHA256SUMS` download verified (checksum match) over plain HTTPS. This closes the long-deferred §4 gate.
+
+**Found + fixed one more bug:** `self_update.rs` compared `release.version` (`v0.8.2`) raw against `CARGO_PKG_VERSION` (`0.8.2`), so it always reported an upgrade and would re-download the same version. Now compared via `strip_v()` (strips a leading `v`/`V`).
+
+---
+
 ## Fix session (2026-08-22) — all findings addressed
 
 All three high-severity bugs and the four mediums fixed; verified live. Gates green (66 core + 9 CLI + 1 real-world; clippy/fmt clean).

@@ -1,23 +1,21 @@
 # HANDOFF — ikk
 
-**Last session:** 2026-08-22 — fixed all S-tier re-review findings (3 high + 4 medium + cleanups). Gates green: fmt, clippy (`-D warnings`), `cargo test` (66 core + 9 CLI + 1 real-world).
+**Last session:** 2026-08-22 — repo made public; live `ikk self-update` e2e closed. Found + fixed one more bug (version `v`-prefix comparison). Gates green: fmt, clippy (`-D warnings`), `cargo test` (66 core + 10 CLI + 1 real-world).
 
 ## State
 
-- **`ikk gc`** no longer trips on the store `.lock` — collects only `meta.toml`-bearing directories (`gc.rs::is_store_entry`).
-- **Symlink integrity** — `store::copy_dir_contents` re-creates symlinks (matches `hash_dir`) instead of dereferencing; cycle-safe, Windows copy fallback; `processor` DMG path reuses it.
-- **Package-name validation** — `ops::validate_name` rejects `.`/`..`/separators/metacharacters; enforced in `link_bin`/`remove` + `add`/`remove`/`run`. The `ikk install '..'` data-loss path is closed.
-- **`upgrade --force`** now drops the pin and resolves `latest`.
-- **Bash rc** — `write_rc`/`remove_rc`/`rc_file` share `Shell::bash_rc_file` (macOS `.bash_profile` convention).
-- **Forge downloads** stream via `progress::download_bytes` (bearer-aware, progress bar).
-- **`self-update`** expands `self_update_repo` with a `github.com` fallback when `defaults.remote` is unset.
-- Cleanups: removed `LockFile::diff`/`SyncPlan` + `Store::find_all`; simplified dead `check` branch; case-insensitive `sha256` pin; safe `entry_name` slice; `#[cfg(windows)]` cmd sweep; `store.insert` cleans partial entries on failure.
+- Repo `mandeepsmagh/ikk` is **public**. Live `self-update` e2e passes unauthenticated:
+  - `ikk self-update --check` → `ikk is up to date (0.8.2)` (no `GITHUB_TOKEN`).
+  - Asset + `SHA256SUMS` download verified (checksum match) over plain HTTPS.
+- **`v`-prefix bug fixed** — `self_update.rs` now compares `strip_v(tag_name)` against `CARGO_PKG_VERSION`; previously `v0.8.2 != 0.8.2` made it always report an upgrade and re-download the same version.
+- All prior re-review fixes remain in place: `gc` `.lock` skip, symlink-preserving copy, package-name validation, `upgrade --force` → `latest`, bash rc path, streamed forge downloads, `self-update` `github.com` fallback.
 
-## Next session
+## Next session (optional, non-blocking)
 
-- Live `ikk self-update` e2e against the private repo **with `GITHUB_TOKEN` set** (asset match + SHA256SUMS verification) — still the last un-run gate.
-- Optional (documented, not bugs): unkeyed Merkle root hardening (length-prefix leaves / signing), `install.sh` JSON parsing via a real parser, `windows-arm64`/`linux-musl` release assets.
+- **Release signing** — cosign keyless now that the repo is public (or minisign): sign `SHA256SUMS` in `release.yml` and verify in `self-update`/`install.sh`.
+- **`install.sh` hardening** — python3/jq JSON parse fallback, optional `GITHUB_TOKEN`, prerelease/draft gate.
+- Merkle leaf length-prefixing (ambiguity hygiene); `windows-arm64`/`linux-musl` release assets.
 
 ## Broken boundaries / known flakes
 
-- None. All gates green; the three high-severity repros from the prior session are covered by regression tests.
+- None. All gates green; the long-deferred live self-update e2e (§4) is now closed.

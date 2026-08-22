@@ -46,7 +46,10 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
         );
     }
 
-    if release.version == current {
+    // Tag names are conventionally prefixed with `v` (e.g. `v0.8.2`) while
+    // CARGO_PKG_VERSION is not (`0.8.2`) — compare version-normalised so an
+    // up-to-date install isn't reported as having an upgrade available.
+    if strip_v(&release.version) == current {
         println!("ikk is up to date ({current})");
         return Ok(());
     }
@@ -114,6 +117,12 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
 
     println!("ikk updated to {}", release.version);
     Ok(())
+}
+
+/// Strip the conventional leading `v`/`V` from a tag name for comparison
+/// against `CARGO_PKG_VERSION` (which has no prefix).
+fn strip_v(version: &str) -> &str {
+    version.strip_prefix('v').or_else(|| version.strip_prefix('V')).unwrap_or(version)
 }
 
 /// Fetch `{repo}/releases/download/{version}/SHA256SUMS` and return the hash
@@ -206,4 +215,16 @@ fn replace_binary_windows(exe: &std::path::Path, bytes: &[u8]) -> Result<()> {
 #[cfg(not(windows))]
 fn file_stem(path: &std::path::Path) -> String {
     path.file_name().and_then(|n| n.to_str()).unwrap_or("ikk").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_v_handles_tag_prefix() {
+        assert_eq!(strip_v("v0.8.2"), "0.8.2");
+        assert_eq!(strip_v("V1.0.0"), "1.0.0");
+        assert_eq!(strip_v("0.8.2"), "0.8.2");
+    }
 }
