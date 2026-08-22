@@ -1,5 +1,44 @@
 # REVIEW
 
+## S-tier Review (2026-08-22) — full re-review
+
+**Verdict:** A-tier, not yet S-tier. Architecture, security fundamentals, and test discipline are strong, but three reproducible bugs block S-tier — one of them a data-loss bug: `ikk gc` is broken, `ikk check` false-positives on symlinked packages, and an unvalidated package name can make `ikk install`/`remove` delete the whole ikk home.
+
+Gates: `cargo fmt --check` ✅ · `cargo clippy -D warnings` ✅ · `cargo test` = 64 core + 8 CLI + 1 real-world (2 GitHub e2e `#[ignore]`).
+
+### High severity (reproduced)
+
+1. **`ikk gc` always fails on the store lock file.** `ikk-cli/src/commands/gc.rs:22-40` iterates every store entry and `remove_dir_all`s anything not referenced by the lock — but the store dir contains `.lock` (held by `gc` itself via `Ctx::load`). `remove_dir_all` on a file errors, and the preceding chmod also flips `.lock` to `0o755`. Repro: `ikk gc` → `Error: Not a directory (os error 20)`; `ls ~/.ikk/store` shows `.lock` now `-rwxr-xr-x`. Fix: skip `.lock`/hidden files, or only delete entries containing `meta.toml` (the same predicate `find_all`/`verify_all` use).
+
+2. **Symlinked packages falsely fail `ikk check`.** `store.rs::hash_dir` (line 302) hashes a symlink by its target string (`read_link`, line 314), but `copy_dir_contents` (line 327) dereferences symlinks into regular files. Stored tree ≠ hashed tree → `verify_all` reports `TAMPER DETECTED` on an unmodified install. Repro: local dir with `tool -> real-tool`, `ikk install` then `ikk check` → tamper alarm with two different hashes. Also: `copy_dir_contents` follows dir symlinks, so a `..`-cycle tarball recurses until failure. Fix: preserve symlinks on copy (and guard cycles).
+
+3. **Unvalidated package name → `ikk install`/`remove` deletes the ikk home (data loss).** `link_bin` joins the raw name into `bin/<name>` and unconditionally `remove_dir_all`s whatever is there (`ops.rs:147,157`); `remove_dir_or_link` does the same for `ikk remove` (`ops.rs:226-234,259`). A name of `..` resolves `bin/..` to `~/.ikk` and deletes the entire home (config, lock, store, stage); `.` deletes `bin/` itself. Reproduced: `ikk install '..' --uri file://…` → `ikk.toml` and `store/` are gone before it errors "failed to create bin link". Same via `ikk remove '..'`, and `sync`'s `remove_stale` (any lock key named `..`). Fix: reject empty/`.`/`..`/path-separator names at CLI entry and defensively in `ops` before any path join.
+
+### Medium severity
+
+3. `upgrade --force` does not upgrade pinned packages — it un-skips the pin but `ops::install` still resolves the pinned version verbatim, so it re-downloads the same version and reports "already up to date" (`ikk-cli/src/commands/upgrade.rs:35,124`).
+4. Bash rc mismatch on macOS — `Shell::rc_file()` returns `.bash_profile` (line 44) but `write_rc`/`remove_rc` hardcode `.bashrc` (lines 125/167); the PATH block lands in a file login shells never source, while `init` prints the `.bash_profile` path.
+5. `RemoteSource::fetch` buffers the whole asset in memory with no progress (`source.rs:137-146`), unlike `UrlSource` which streams via `download_bytes`.
+6. `ikk self-update` silently depends on `defaults.remote` — `self_update_repo` ("mandeepsmagh/ikk") is `owner/repo` shorthand, so `resolve_uri` needs `defaults.remote` to expand it. With no default remote set (`ikk init` allows skipping the prompt), `self-update` fails `Error: mandeepsmagh/ikk: relative URL without a base`. Repro: `ikk init --silent --no-shell` then `ikk self-update --check`. Fix: expand against a host derived from the repo value (or default to `github.com`) instead of `defaults.remote`.
+
+### Low / hardening
+
+- Dead code: `LockFile::diff` + `SyncPlan`, `Store::find_all` (no production callers).
+- `check`'s "merkle root invalid" branch is unreachable — `LockFile::load` already verifies and errors first.
+- Merkle root is unkeyed → detects accidental, not deliberate, tampering.
+- `link_bin` spawns `cmd /C rmdir` on every platform (should be `#[cfg(windows)]`).
+- `entry_name` slices `[..12]` guarded only by `debug_assert` (compiled out in release).
+- `store.insert` leaves a partial entry (no `meta.toml`) if copy fails; `gc` would clean it, but `gc` is currently broken (finding 1).
+- `install.sh` parses JSON with `grep|sed`, no `GITHUB_TOKEN`/prerelease filtering.
+
+### Still deferred (unchanged)
+
+- Live `ikk self-update` e2e (repo private → API 404).
+- No `windows-arm64` / `linux-musl` release assets.
+- Length-prefix lockfile Merkle leaves + `hash_dir` field separators.
+
+---
+
 ## Follow-up Review (2026-08-21) — closed
 
 **Verdict:** S-tier. The two CLI logic bugs and the dry-run honesty gap found in the prior review are fixed; input-dependent `.unwrap()`/`.expect()` calls removed; CLI now has test coverage. All gates green (62 core + 8 CLI tests).
