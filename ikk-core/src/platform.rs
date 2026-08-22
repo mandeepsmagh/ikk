@@ -238,6 +238,13 @@ mod tests {
 
         let win = Platform { os: Os::Windows, arch: Arch::X86_64 };
         assert!(score_asset("ikk-windows-x86_64.zip", &win).is_some());
+
+        let win_arm = Platform { os: Os::Windows, arch: Arch::Aarch64 };
+        assert!(score_asset("ikk-windows-arm64.zip", &win_arm).is_some());
+        // Native arm64 must beat the emulated x86_64 asset on ARM Windows.
+        let arm = score_asset("ikk-windows-arm64.zip", &win_arm).unwrap();
+        let x64 = score_asset("ikk-windows-x86_64.zip", &win_arm).unwrap();
+        assert!(arm > x64, "native arm64 asset must beat x64 on ARM Windows");
     }
 
     /// `x86_64` must score as a real arch match — not fall through to the

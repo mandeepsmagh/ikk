@@ -20,6 +20,7 @@ This document outlines the strategic architectural shifts required to transform 
 | S-tier re-review fixes (2026-08-22) | ✅ done — `gc` skips `.lock`/meta-less entries, symlink-preserving `copy_dir_contents`, package-name validation (data-loss closed), `upgrade --force` resolves `latest`, bash rc path unified, forge downloads streamed, `self-update` `github.com` fallback |
 | Live self-update e2e (2026-08-22) | ✅ done — repo public; unauthenticated `--check` + asset/`SHA256SUMS` verified; fixed `v`-prefix version comparison |
 | macOS static `liblzma` (2026-08-22) | ✅ done — `xz2` `static` feature; macOS assets self-contained (no Homebrew dylib); `v0.8.3` release required to ship |
+| windows-arm64 asset (2026-08-22) | ✅ done — `release.yml` `aarch64-pc-windows-msvc` matrix row, `install.ps1` `ProcessArchitecture` detection, `score_asset` native-beats-emulated test; ships with next tag |
 
 ---
 

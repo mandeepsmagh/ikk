@@ -9,7 +9,14 @@ param(
 $ErrorActionPreference = "Stop"
 
 # ── detect architecture ────────────────────────────────────────────────────
-$Arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { "x86" }
+# ProcessArchitecture reflects the real CPU (native on ARM64, not the
+# emulated arch), so Windows-on-ARM gets the native arm64 build.
+$Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture) {
+    "Arm64" { "arm64" }
+    "X64"   { "x86_64" }
+    "X86"   { "x86" }
+    default { "x86_64" }
+}
 if ($Arch -eq "x86") {
     Write-Error "32-bit Windows is not supported"
     exit 1
