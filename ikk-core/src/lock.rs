@@ -157,43 +157,6 @@ impl LockFile {
 
         hex::encode(root.finalize())
     }
-
-    /// Compute diff between lock (desired) and what's in the store.
-    #[must_use]
-    pub fn diff(&self, installed: &BTreeMap<String, String>) -> SyncPlan {
-        let mut to_install = vec![];
-        let mut to_remove = vec![];
-        let mut up_to_date = vec![];
-
-        for (name, pkg) in &self.packages {
-            match installed.get(name) {
-                Some(ver) if ver == &pkg.version => up_to_date.push(name.clone()),
-                Some(_) | None => to_install.push(name.clone()),
-            }
-        }
-
-        for name in installed.keys() {
-            if !self.packages.contains_key(name) {
-                to_remove.push(name.clone());
-            }
-        }
-
-        SyncPlan { to_install, to_remove, up_to_date }
-    }
-}
-
-#[derive(Debug)]
-pub struct SyncPlan {
-    pub to_install: Vec<String>,
-    pub to_remove: Vec<String>,
-    pub up_to_date: Vec<String>,
-}
-
-impl SyncPlan {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.to_install.is_empty() && self.to_remove.is_empty()
-    }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

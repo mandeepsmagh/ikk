@@ -63,8 +63,9 @@ impl Store {
         variant: Option<&str>,
         content_hash: &str,
     ) -> String {
-        let hash_prefix = &content_hash[..12];
-        debug_assert!(content_hash.len() >= 12, "SHA-256 hex is always 64 chars");
+        // Internal callers always pass a full 64-char SHA-256 hex, but slice
+        // defensively so a short hash can never panic in release builds.
+        let hash_prefix = content_hash.get(..12).unwrap_or(content_hash);
         let base = format!("{hash_prefix}-{name}-{version}");
         match variant {
             Some(v) if !v.is_empty() => format!("{base}-{v}"),
@@ -82,41 +83,6 @@ impl Store {
         content_hash: &str,
     ) -> PathBuf {
         self.root.join(Self::entry_name(name, version, variant, content_hash))
-    }
-
-    /// Find all store entries matching a package name.
-    ///
-    /// Matches on the recorded package name in `meta.toml`, not on the
-    /// directory name — package names containing dashes would otherwise
-    /// cross-match (e.g. `foo` matching `foo-bar`).
-    #[must_use]
-    pub fn find_all(&self, name: &str) -> Vec<StorePath> {
-        let mut results: Vec<StorePath> = std::fs::read_dir(&self.root)
-            .into_iter()
-            .flatten()
-            .filter_map(std::result::Result::ok)
-            .filter_map(|e| {
-                let path = e.path();
-                let entry_name = e.file_name().to_string_lossy().to_string();
-                let meta: StoreMeta =
-                    toml::from_str(&std::fs::read_to_string(path.join("meta.toml")).ok()?).ok()?;
-                if meta.name != name {
-                    return None;
-                }
-                Some(StorePath {
-                    hash: meta.content_sha256.clone(),
-                    name: meta.name.clone(),
-                    version: meta.version,
-                    variant: meta.variant,
-                    entry_name,
-                    root: path.join("bin"),
-                    path,
-                })
-            })
-            .collect();
-
-        results.sort_by(|a, b| a.path.cmp(&b.path));
-        results
     }
 
     /// Insert an artifact as a content-addressed entry. Idempotent — skips if
@@ -165,27 +131,37 @@ impl Store {
             Err(e) => return Err(e.into()),
         }
 
-        // Copy the package root into the entry under 'bin'.
+        // Copy the package root into the entry under 'bin', then write
+        // meta.toml. On any failure, remove the partial entry so a broken
+        // install never leaves a half-written store dir behind.
         let root = entry.join("bin");
-        copy_dir_contents(&artifact.dir, &root)?;
+        let populate = (|| -> Result<()> {
+            copy_dir_contents(&artifact.dir, &root)?;
 
-        // Metadata — temp+rename so a crash never leaves a partial meta.toml.
-        let meta = StoreMeta {
-            name: name.to_string(),
-            version: version.to_string(),
-            variant: variant.map(String::from),
-            source_url: artifact.source_url.clone(),
-            archive_sha256: artifact.archive_hash.clone(),
-            content_sha256: content_hash.clone(),
-            installed_at: crate::lock::unix_now(),
-        };
-        let meta_path = entry.join("meta.toml");
-        let tmp_meta = meta_path.with_extension(format!("toml.{}.tmp", std::process::id()));
-        std::fs::write(
-            &tmp_meta,
-            toml::to_string(&meta).map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?,
-        )?;
-        std::fs::rename(&tmp_meta, &meta_path)?;
+            // Metadata — temp+rename so a crash never leaves a partial meta.toml.
+            let meta = StoreMeta {
+                name: name.to_string(),
+                version: version.to_string(),
+                variant: variant.map(String::from),
+                source_url: artifact.source_url.clone(),
+                archive_sha256: artifact.archive_hash.clone(),
+                content_sha256: content_hash.clone(),
+                installed_at: crate::lock::unix_now(),
+            };
+            let meta_path = entry.join("meta.toml");
+            let tmp_meta = meta_path.with_extension(format!("toml.{}.tmp", std::process::id()));
+            std::fs::write(
+                &tmp_meta,
+                toml::to_string(&meta).map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?,
+            )?;
+            std::fs::rename(&tmp_meta, &meta_path)?;
+            Ok(())
+        })();
+
+        if let Err(e) = populate {
+            let _ = std::fs::remove_dir_all(&entry);
+            return Err(e);
+        }
 
         tracing::info!(
             "stored {}@{}{} ({})",
@@ -324,19 +300,66 @@ fn hash_dir(dir: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
+/// Copy a directory tree recursively, preserving symlinks.
+///
+/// Symlinks are re-created (not followed) so the stored tree matches what
+/// `hash_dir` hashes — following them would turn a hashed symlink target
+/// into a regular file and make `verify_all` report false tampering. Not
+/// following them also means a symlink cycle can never recurse forever.
+pub(crate) fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir)?;
     for entry in std::fs::read_dir(src).map_err(|e| IkkError::Store(e.to_string()))? {
         let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
         let path = entry.path();
         let dest = dest_dir.join(entry.file_name());
-        if path.is_dir() {
+
+        let meta = path.symlink_metadata().map_err(|e| IkkError::Store(e.to_string()))?;
+        if meta.is_symlink() {
+            let target = std::fs::read_link(&path)?;
+            recreate_symlink(&target, &dest).or_else(|e| {
+                // Symlinks unavailable (e.g. Windows without Developer Mode):
+                // dereference-copy from the source so installs still work.
+                tracing::warn!("symlink unavailable ({e}); copying {} instead", dest.display());
+                if path.is_dir() {
+                    copy_dir_contents(&path, &dest)
+                } else {
+                    std::fs::copy(&path, &dest).map(|_| ()).map_err(IkkError::Io)
+                }
+            })?;
+        } else if meta.is_dir() {
             copy_dir_contents(&path, &dest)?;
         } else {
             std::fs::copy(&path, &dest)?;
         }
     }
     Ok(())
+}
+
+/// Re-create a symlink at `dest` pointing at `target`.
+///
+/// Windows needs to know whether the target is a directory. The caller falls
+/// back to a dereferenced copy if symlink creation is unavailable.
+fn recreate_symlink(target: &Path, dest: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, dest)
+    }
+
+    #[cfg(windows)]
+    {
+        let is_dir = std::fs::metadata(target).map(|m| m.is_dir()).unwrap_or(false);
+        if is_dir {
+            std::os::windows::fs::symlink_dir(target, dest)
+        } else {
+            std::os::windows::fs::symlink_file(target, dest)
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, dest);
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "symlinks unsupported"))
+    }
 }
 
 #[cfg(test)]
@@ -392,10 +415,6 @@ mod tests {
         assert!(sp.root.join("rg").exists());
         assert!(!sp.path.join(".sealed").exists());
 
-        let found = store.find_all("ripgrep");
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].entry_name, sp.entry_name);
-
         // Idempotent re-insert
         let sp2 = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
         assert_eq!(sp2.entry_name, sp.entry_name);
@@ -426,21 +445,26 @@ mod tests {
     }
 
     #[test]
-    fn find_all_does_not_cross_match_dashed_names() {
-        let tmp = std::env::temp_dir().join(format!("ikk_test_findall_{}", std::process::id()));
+    fn symlinked_package_verifies_clean() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_symlink_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
         let src = tmp.join("src");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::write(src.join("tool"), b"binary").unwrap();
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::write(src.join("bin/real-tool"), b"binary").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("real-tool", src.join("bin/tool")).unwrap();
 
         let store = Store::open(tmp.join("store")).unwrap();
-        store.insert("foo", "1.0", None, &artifact(&src)).unwrap();
-        store.insert("foo-bar", "1.0", None, &artifact(&src)).unwrap();
+        store.insert("mytool", "1.0", None, &artifact(&src)).unwrap();
 
-        assert_eq!(store.find_all("foo").len(), 1);
-        assert_eq!(store.find_all("foo-bar").len(), 1);
+        // The stored tree preserves the symlink, so it re-hashes identically.
+        let results = store.verify_all().unwrap();
+        assert!(
+            matches!(results[0], VerifyResult::Ok(_)),
+            "symlinked package must not read as tampered"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

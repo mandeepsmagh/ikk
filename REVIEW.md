@@ -1,5 +1,23 @@
 # REVIEW
 
+## Fix session (2026-08-22) — all findings addressed
+
+All three high-severity bugs and the four mediums fixed; verified live. Gates green (66 core + 9 CLI + 1 real-world; clippy/fmt clean).
+
+1. ✅ `ikk gc` — only collects directories containing `meta.toml`; skips `.lock` and partial entries (`gc.rs::is_store_entry`).
+2. ✅ Symlink false-tamper — `store::copy_dir_contents` now re-creates symlinks instead of dereferencing (matches `hash_dir`), with a cycle-free walk + Windows copy fallback; `processor` reuses it for DMG.
+3. ✅ Package-name data loss — `ops::validate_name` rejects empty/`.`/`..`/separators/metacharacters; enforced in `link_bin`/`remove` (core) and `add`/`remove`/`run` (CLI).
+4. ✅ `upgrade --force` — drops the pin so pinned packages actually resolve to `latest`.
+5. ✅ Bash rc mismatch — `write_rc`/`remove_rc` now resolve `.bash_profile` vs `.bashrc` via `Shell::bash_rc_file`, matching `rc_file()`.
+6. ✅ Forge downloads — `RemoteSource::fetch` streams through `progress::download_bytes` (bearer-auth aware) with a progress bar.
+7. ✅ `self-update` — expands `self_update_repo` against `defaults.remote`, falling back to `github.com` (no more "relative URL without a base").
+
+Also: dead code removed (`LockFile::diff`/`SyncPlan`, `Store::find_all`), unreachable `check` branch simplified, case-insensitive `sha256` pin comparison, safe `entry_name` slicing, `link_bin`'s `cmd` sweep gated `#[cfg(windows)]`, and `store.insert` cleans up a partial entry on failure.
+
+Still deferred (documented, not bugs): unkeyed Merkle root (accidental-corruption detection only), `install.sh` JSON parsing via `grep|sed`, live `ikk self-update` e2e (private repo), `windows-arm64`/`linux-musl` assets.
+
+---
+
 ## S-tier Review (2026-08-22) — full re-review
 
 **Verdict:** A-tier, not yet S-tier. Architecture, security fundamentals, and test discipline are strong, but three reproducible bugs block S-tier — one of them a data-loss bug: `ikk gc` is broken, `ikk check` false-positives on symlinked packages, and an unvalidated package name can make `ikk install`/`remove` delete the whole ikk home.

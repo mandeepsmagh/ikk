@@ -21,6 +21,12 @@ pub enum IkkError {
     #[error("package '{0}' not found in config")]
     PackageNotFound(String),
 
+    #[error(
+        "invalid package name '{0}' — names must be non-empty, not `.` or `..`, and \
+         contain only letters, digits, or `-_.+`"
+    )]
+    InvalidPackageName(String),
+
     #[error("{0}")]
     MalformedUri(String),
 

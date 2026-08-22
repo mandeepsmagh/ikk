@@ -10,6 +10,8 @@ pub struct RemoveArgs {
 }
 
 pub fn run(args: RemoveArgs, home: &IkkHome) -> Result<()> {
+    ikk_core::ops::validate_name(&args.name)?;
+
     let mut ctx = Ctx::load(home)?;
 
     ops::remove(&args.name, &ctx.home, &ctx.store, &mut ctx.lock)?;

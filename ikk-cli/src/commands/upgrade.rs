@@ -25,7 +25,7 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
     let mut failed = vec![];
 
     for name in &names {
-        let Some(pkg) = ctx.config.packages.get(name).cloned() else {
+        let Some(mut pkg) = ctx.config.packages.get(name).cloned() else {
             anyhow::bail!("package '{name}' not found in config");
         };
 
@@ -38,6 +38,13 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
                 pkg.version.as_deref().unwrap_or("latest")
             );
             continue;
+        }
+
+        // `--force` means "upgrade even if pinned": drop the pin so the
+        // package resolves to `latest` instead of reinstalling the same
+        // pinned version.
+        if args.force && matches!(pkg.version.as_deref(), Some(v) if v != "latest") {
+            pkg.version = None;
         }
 
         let before = ctx.lock.get(name).map(|locked| locked.version.clone());

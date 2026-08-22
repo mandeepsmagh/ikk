@@ -52,9 +52,19 @@ pub(crate) fn download_bar(total: u64, label: &str) -> ProgressBar {
 /// Stream download with progress display.
 ///
 /// The `reqwest::Client` should be configured with a timeout — a stalled
-/// connection will otherwise hang indefinitely.
-pub async fn download_bytes(http: &reqwest::Client, url: &str, label: &str) -> Result<Vec<u8>> {
-    let resp = http.get(url).send().await?.error_for_status()?;
+/// connection will otherwise hang indefinitely. `bearer` is attached as an
+/// `Authorization` header when present (private-repo release assets).
+pub async fn download_bytes(
+    http: &reqwest::Client,
+    url: &str,
+    label: &str,
+    bearer: Option<&str>,
+) -> Result<Vec<u8>> {
+    let mut req = http.get(url);
+    if let Some(token) = bearer {
+        req = req.bearer_auth(token);
+    }
+    let resp = req.send().await?.error_for_status()?;
     let total = resp.content_length().unwrap_or(0);
     let bar = download_bar(total, label);
 

@@ -26,8 +26,15 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
 
     // Publishing repo comes from config (set by `ikk init`); the user can point
-    // it at a fork or another forge by editing one line.
-    let url = ctx.config.resolve_uri(&ctx.config.defaults.self_update_repo)?;
+    // it at a fork or another forge by editing one line. `self_update_repo` is
+    // `owner/repo` shorthand, so expand it against the default remote, falling
+    // back to github.com when none is set (the default repo lives on GitHub).
+    let repo = &ctx.config.defaults.self_update_repo;
+    let host = ctx.config.defaults.remote.as_deref().unwrap_or("github.com");
+    let expanded =
+        ikk_core::config::Config::expand_uri(repo, Some(host)).unwrap_or_else(|| repo.clone());
+    let url =
+        url::Url::parse(&expanded).with_context(|| format!("invalid self_update_repo '{repo}'"))?;
     let remote = ctx.registry.remote_for(&url)?;
 
     let release = remote.latest().await?;

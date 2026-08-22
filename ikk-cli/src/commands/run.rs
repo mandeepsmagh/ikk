@@ -17,6 +17,8 @@ pub struct RunArgs {
 }
 
 pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
+    ikk_core::ops::validate_name(&args.name)?;
+
     let ctx = Ctx::load_readonly(home)?;
 
     if ctx.lock.get(&args.name).is_none() {

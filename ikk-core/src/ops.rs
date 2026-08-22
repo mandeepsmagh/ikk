@@ -97,7 +97,7 @@ async fn install_from_source<'a>(
     // Verify the expected archive hash if one is pinned in config.
     // An empty actual hash means there was no archive to verify (local dir).
     if let Some(expected) = &req.pkg.sha256
-        && artifact.archive_hash != *expected
+        && !artifact.archive_hash.eq_ignore_ascii_case(expected)
     {
         return Err(IkkError::HashMismatch {
             name: req.name.to_string(),
@@ -135,12 +135,34 @@ async fn install_from_source<'a>(
     Ok(())
 }
 
+/// Validate a package name before it is interpolated into any filesystem
+/// path.
+///
+/// Names land in `bin/<name>` and the store entry name. A name of `.`, `..`,
+/// or one containing path separators would escape the ikk home — and
+/// `link_bin`/`remove` would `remove_dir_all` whatever is there. The allowed
+/// alphabet is deliberately conservative.
+#[must_use]
+pub fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+}
+
+/// Reject a package name that would be unsafe to use as a filesystem path.
+pub fn validate_name(name: &str) -> Result<()> {
+    if is_valid_name(name) { Ok(()) } else { Err(IkkError::InvalidPackageName(name.to_string())) }
+}
+
 /// Create `bin/<name>/` pointing at the store entry's package root.
 ///
 /// Symlinks/junctions are preferred; a full copy is the degraded fallback
 /// for filesystems that don't support them. Returns the link type actually
 /// used (`"link"` or `"copy"`) so callers can record it in the lock file.
 pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<String> {
+    validate_name(name)?;
+
     // bin/ may not exist yet (e.g. CLI flow without a prior `ikk init`).
     std::fs::create_dir_all(home.bin_dir())?;
 
@@ -160,6 +182,7 @@ pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<String> {
     }
 
     // Final sweep: nuke whatever is left (junction or directory) via cmd.
+    #[cfg(windows)]
     if link.exists() {
         let _ =
             std::process::Command::new("cmd").args(["/C", "rmdir", "/S", "/Q"]).arg(&link).output();
@@ -255,6 +278,8 @@ fn remove_dir_or_link(path: &Path) -> Result<()> {
 
 /// Remove a package: unlink `bin/<name>/`, remove store entry, remove lock entry.
 pub fn remove(name: &str, home: &IkkHome, store: &Store, lock: &mut LockFile) -> Result<()> {
+    validate_name(name)?;
+
     // Unlink bin/<name>/
     remove_dir_or_link(&home.bin_dir().join(name))?;
 
@@ -361,6 +386,25 @@ mod tests {
         assert!(!home.bin_dir().join("mytool").exists());
         assert!(!sp.path.exists());
         assert!(lock.get("mytool").is_none());
+
+        let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[test]
+    fn link_bin_and_remove_reject_traversal_names() {
+        let (_dir, home, store, mut lock, _platform) = setup("traversal");
+
+        let target = home.root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("tool"), b"binary").unwrap();
+
+        for bad in [".", "..", "a/../b", "", "a\\b"] {
+            assert!(link_bin(&home, bad, &target).is_err(), "link_bin accepted '{bad}'");
+            assert!(remove(bad, &home, &store, &mut lock).is_err(), "remove accepted '{bad}'");
+        }
+
+        // Rejected attempts must not have touched the ikk home.
+        assert!(home.root.exists());
 
         let _ = std::fs::remove_dir_all(&home.root);
     }

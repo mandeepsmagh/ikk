@@ -141,15 +141,15 @@ impl Source for RemoteSource {
         let assets = self.remote.assets(version).await?;
         let asset = crate::processor::best_asset(&assets, platform)?;
 
-        tracing::info!("downloading {}…", asset.name);
+        let bytes = crate::progress::download_bytes(
+            &self.http,
+            &asset.url,
+            &asset.name,
+            self.remote.auth_bearer(),
+        )
+        .await?;
 
-        let mut req = self.http.get(&asset.url);
-        if let Some(token) = self.remote.auth_bearer() {
-            req = req.bearer_auth(token);
-        }
-        let bytes = req.send().await?.bytes().await?;
-
-        Ok(RawContent::Bytes { bytes: bytes.to_vec(), filename: asset.name.clone() })
+        Ok(RawContent::Bytes { bytes, filename: asset.name.clone() })
     }
 }
 
@@ -187,7 +187,7 @@ impl Source for UrlSource {
 
         tracing::info!("downloading {url}…");
 
-        let bytes = crate::progress::download_bytes(&self.http, &url, "").await?;
+        let bytes = crate::progress::download_bytes(&self.http, &url, "", None).await?;
 
         let filename = url.rsplit('/').next().unwrap_or("download").to_string();
 

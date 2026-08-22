@@ -151,7 +151,7 @@ fn extract_dmg_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
     let _cleanup = CleanupFile(dmg_path.clone());
 
     let mount = attach_dmg(&dmg_path)?;
-    copy_dir_contents(Path::new(&mount), out_dir)?;
+    crate::store::copy_dir_contents(Path::new(&mount), out_dir)?;
     let _ = Command::new("hdiutil").args(["detach", &mount, "-quiet"]).output();
     Ok(out_dir.to_path_buf())
 }
@@ -188,21 +188,6 @@ fn attach_dmg(dmg_path: &Path) -> Result<String> {
         .and_then(|l| l.split_whitespace().last())
         .map(ToString::to_string)
         .ok_or_else(|| IkkError::Store("could not determine dmg mount point".into()))
-}
-
-#[cfg(target_os = "macos")]
-fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(src).map_err(|e| IkkError::Store(e.to_string()))? {
-        let entry = entry.map_err(|e| IkkError::Store(e.to_string()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            std::fs::create_dir_all(dest_dir.join(entry.file_name()))?;
-            copy_dir_contents(&path, &dest_dir.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(&path, dest_dir.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
 }
 
 // ── zip path safety ──────────────────────────────────────────────────────────

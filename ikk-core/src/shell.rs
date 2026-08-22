@@ -43,12 +43,7 @@ impl Shell {
 
         match self {
             Shell::Zsh => Some(home.join(".zshrc")),
-            Shell::Bash => {
-                // macOS Terminal.app opens login shells → .bash_profile
-                let profile = home.join(".bash_profile");
-                let bashrc = home.join(".bashrc");
-                if profile.exists() && !bashrc.exists() { Some(profile) } else { Some(bashrc) }
-            }
+            Shell::Bash => Some(Self::bash_rc_file(&home)),
             Shell::Fish => Some(
                 dirs::config_dir().unwrap_or_else(|| home.join(".config")).join("fish/config.fish"),
             ),
@@ -72,6 +67,15 @@ impl Shell {
             }
             Shell::Unknown => None,
         }
+    }
+
+    /// The bash rc file under `dir`, honouring the macOS login-shell
+    /// convention (.bash_profile wins when it exists and .bashrc does not).
+    #[must_use]
+    fn bash_rc_file(dir: &Path) -> PathBuf {
+        let profile = dir.join(".bash_profile");
+        let bashrc = dir.join(".bashrc");
+        if profile.exists() && !bashrc.exists() { profile } else { bashrc }
     }
 
     /// The string key used by `path_exports` / `write_rc`.
@@ -122,7 +126,11 @@ pub fn path_exports(home: &IkkHome, shell: &str) -> Vec<String> {
 pub fn write_rc(dir: &Path, shell: &str, home: &IkkHome) -> Result<PathBuf> {
     let (filename, lines) = match shell {
         "zsh" => (".zshrc".to_string(), path_exports(home, "zsh")),
-        "bash" => (".bashrc".to_string(), path_exports(home, "bash")),
+        "bash" => {
+            let rc = Shell::bash_rc_file(dir);
+            let filename = rc.file_name().and_then(|n| n.to_str()).unwrap_or(".bashrc").to_string();
+            (filename, path_exports(home, "bash"))
+        }
         "fish" => (".config/fish/config.fish".to_string(), path_exports(home, "fish")),
         "nushell" => (".config/nushell/config.nu".to_string(), path_exports(home, "nushell")),
         "powershell" | "pwsh" => {
@@ -162,16 +170,14 @@ pub fn write_rc(dir: &Path, shell: &str, home: &IkkHome) -> Result<PathBuf> {
 
 /// Remove the ikk PATH block from a shell rc file. Returns true if modified.
 pub fn remove_rc(dir: &Path, shell: &str) -> Result<bool> {
-    let filename = match shell {
-        "zsh" => ".zshrc",
-        "bash" => ".bashrc",
-        "fish" => ".config/fish/config.fish",
-        "nushell" => ".config/nushell/config.nu",
-        "powershell" | "pwsh" => "Microsoft/PowerShell/Profile.ps1",
+    let path = match shell {
+        "zsh" => dir.join(".zshrc"),
+        "bash" => Shell::bash_rc_file(dir),
+        "fish" => dir.join(".config/fish/config.fish"),
+        "nushell" => dir.join(".config/nushell/config.nu"),
+        "powershell" | "pwsh" => dir.join("Microsoft/PowerShell/Profile.ps1"),
         _ => return Ok(false),
     };
-
-    let path = dir.join(filename);
     if !path.exists() {
         return Ok(false);
     }
@@ -253,6 +259,30 @@ mod tests {
             1,
             "marker should appear exactly once"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_rc_bash_honours_profile_convention() {
+        let dir = std::env::temp_dir().join(format!("ikk_test_shell_bash_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // macOS login-shell convention: .bash_profile wins when present and
+        // .bashrc is absent — write_rc and remove_rc must agree with rc_file().
+        std::fs::write(dir.join(".bash_profile"), b"").unwrap();
+
+        let home = IkkHome::new(dir.join(".ikk"));
+        let path = write_rc(&dir, "bash", &home).unwrap();
+
+        assert_eq!(path, dir.join(".bash_profile"));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("# >>> ikk >>>"));
+        assert!(!dir.join(".bashrc").exists(), "PATH block must not go to .bashrc");
+
+        // Removal must target the same file.
+        assert!(remove_rc(&dir, "bash").unwrap());
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("# >>> ikk >>>"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -5,15 +5,10 @@ use ikk_core::{home::IkkHome, store::VerifyResult};
 pub fn run(home: &IkkHome) -> Result<()> {
     let ctx = Ctx::load_readonly(home)?;
 
-    // Verify lock integrity
+    // `Ctx::load_readonly` already verified the lock (LockFile::load runs
+    // `verify`), so a corrupt lock never reaches this point.
     println!("lock:     {}", home.lock_file().display());
-    match ctx.lock.verify() {
-        Ok(()) => println!("  ✓ merkle root valid"),
-        Err(e) => {
-            eprintln!("  ✗ {e}");
-            anyhow::bail!("lock file tampered — restore from backup");
-        }
-    }
+    println!("  ✓ merkle root valid");
 
     // Verify store binaries
     println!("\nstore:    {}", home.store_dir().display());

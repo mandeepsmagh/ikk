@@ -34,6 +34,8 @@ pub struct AddArgs {
 }
 
 pub async fn run(args: AddArgs, home: &IkkHome) -> Result<()> {
+    ikk_core::ops::validate_name(&args.name)?;
+
     let mut ctx = Ctx::load(home)?;
 
     let pkg = PackageConfig {
