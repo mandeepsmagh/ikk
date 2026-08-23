@@ -15,10 +15,13 @@ mod real_world_tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // Extract the full package directory; unwrap_single_root descends into
-        // the lone top-level dir so nvim ends up at the root of the entry.
+        // the lone top-level dir, so the neovim package root contains `bin/nvim`.
         let extracted = extract_dir(&bytes, "nvim-macos-arm64.tar.gz", &dir).unwrap();
         assert!(extracted.exists());
-        assert!(extracted.join("nvim").exists(), "expected nvim binary at the package root");
+        assert!(
+            extracted.join("bin/nvim").exists(),
+            "expected nvim binary at bin/nvim in the package root"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

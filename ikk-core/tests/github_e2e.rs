@@ -60,9 +60,9 @@ async fn pinned_version() {
     assert!(!locked.sha256.is_empty());
     assert!(!locked.bin_entry.is_empty());
 
-    // bin/ripgrep/ links to the store entry with author-native layout (rg inside)
-    let linked = home.bin_dir().join("ripgrep");
-    assert!(linked.exists());
+    // bin/rg → the store binary, symlinked flat for PATH
+    let linked = home.bin_dir().join("rg");
+    assert!(linked.is_symlink() || linked.is_file());
 
     let results = store.verify_all().unwrap();
     assert!(matches!(results[0], ikk_core::store::VerifyResult::Ok(_)));

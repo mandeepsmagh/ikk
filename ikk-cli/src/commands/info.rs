@@ -36,6 +36,10 @@ pub fn run(args: InfoArgs, home: &IkkHome) -> Result<()> {
         println!("  sha256:   {}", locked.sha256);
         println!("  link:     {}", locked.link_type);
         println!("  entry:    {}", locked.bin_entry);
+        if !locked.bins.is_empty() {
+            let names = locked.bins.keys().cloned().collect::<Vec<_>>().join(", ");
+            println!("  binaries: {names}");
+        }
     } else {
         println!("\nnot yet installed — run 'ikk sync'");
     }

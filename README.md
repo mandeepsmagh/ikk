@@ -108,11 +108,11 @@ With `GITHUB_TOKEN` set, ikk uses the authenticated API — 5,000 req/hour inste
 
 ```
 ~/.ikk/
-  bin/<name>/  per-package dir, symlink/junction → store entry (on $PATH)
-  store/       content-addressed storage ({hash}-{name}-{version}[-{variant}])
-  stage/       temporary extraction
-  ikk.toml     what you want
-  ikk.lock     what's installed (merkle-rooted, never edit)
+  bin/          one symlink per executable, e.g. `bin/nvim`, `bin/rg` (on $PATH)
+  store/        content-addressed storage ({hash}-{name}-{version}[-{variant}])
+  stage/        temporary extraction
+  ikk.toml      what you want
+  ikk.lock      what's installed (merkle-rooted, never edit)
 ```
 
 ## Commands
@@ -154,5 +154,5 @@ ikk sync
 - **One version per package** — no shims, no version switching.
 - **Forge-agnostic** — GitHub, GitLab, Codeberg, Gitea: all config in `remotes.toml`, zero code.
 - **Content-addressed store** — archive hashed before storing, merkle-rooted lock file, `ikk check` re-verifies.
-- **Multi-binary packages** — each package owns `bin/<name>/`; `ikk run` reaches into multi-file packages like llama.cpp.
+- **All binaries on PATH** — every executable a package ships is symlinked into `bin/` (`nvim`, `rg`, every `llama-*` …), so tools run natively; `ikk run` still reaches into a package root for helpers and disambiguation.
 - **No sudo** — everything in `~/.ikk`.

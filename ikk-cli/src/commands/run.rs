@@ -1,7 +1,10 @@
 use super::Ctx;
 use anyhow::Result;
 use clap::Args;
-use ikk_core::home::IkkHome;
+use ikk_core::{
+    home::IkkHome,
+    ops::{collect_executables, is_executable},
+};
 use std::process::Command;
 
 #[derive(Args)]
@@ -21,12 +24,13 @@ pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
 
     let ctx = Ctx::load_readonly(home)?;
 
-    if ctx.lock.get(&args.name).is_none() {
+    let Some(locked) = ctx.lock.get(&args.name) else {
         anyhow::bail!("'{}' not installed — run 'ikk sync'", args.name);
-    }
+    };
 
-    // Every package lives at bin/<name>/ with author-native binary names.
-    let pkg_dir = home.bin_dir().join(&args.name);
+    // The package root lives in the content-addressed store; executables are
+    // symlinked into bin/ for PATH, but the root is the full package tree.
+    let pkg_dir = ctx.store.package_root(&locked.bin_entry);
     if !pkg_dir.exists() {
         anyhow::bail!("package directory {} not found — run 'ikk sync'", pkg_dir.display());
     }
@@ -83,19 +87,6 @@ fn single_executable(root: &std::path::Path) -> Option<std::path::PathBuf> {
     if found.len() == 1 { found.pop() } else { None }
 }
 
-fn collect_executables(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_executables(&path, out);
-            } else if is_executable(&path) {
-                out.push(path);
-            }
-        }
-    }
-}
-
 fn list_binaries(dir: &std::path::Path) -> Vec<String> {
     let mut names = vec![];
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -109,23 +100,4 @@ fn list_binaries(dir: &std::path::Path) -> Vec<String> {
         }
     }
     names
-}
-
-/// Is this file an executable? Mode bits on Unix, known script/binary
-/// extensions on Windows.
-#[cfg(unix)]
-fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}
-
-#[cfg(windows)]
-fn is_executable(path: &std::path::Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd"))
 }

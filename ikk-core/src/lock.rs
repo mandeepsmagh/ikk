@@ -37,9 +37,16 @@ pub struct LockedPackage {
     /// Content-addressed store entry name — `{hash12}-{name}-{version}`.
     pub bin_entry: String,
 
-    /// How `bin/<name>/` points at the store entry. `link` (symlink/junction)
-    /// is preferred; `copy` is the degraded fallback on filesystems without
-    /// link support — surfaced by `list`/`info` so users can tell.
+    /// Executables linked into `~/.ikk/bin/` — binary name → path relative
+    /// to the package root inside the store entry. Sorted (BTreeMap) so the
+    /// integrity digest is deterministic.
+    #[serde(default)]
+    pub bins: BTreeMap<String, String>,
+
+    /// How package executables point at the store entry. `link`
+    /// (symlink/junction) is preferred; `copy` is the degraded fallback on
+    /// filesystems without link support — surfaced by `list`/`info` so users
+    /// can tell.
     #[serde(default = "default_link_type")]
     pub link_type: String,
 
@@ -143,6 +150,11 @@ impl LockFile {
                     h.update(variant.as_bytes());
                 }
 
+                for (bin, rel) in &pkg.bins {
+                    h.update(bin.as_bytes());
+                    h.update(rel.as_bytes());
+                }
+
                 hex::encode(h.finalize())
             })
             .collect();
@@ -186,6 +198,7 @@ mod tests {
             uri: uri.into(),
             sha256: hash.into(),
             bin_entry: format!("{}-foo-{}", &padded[..12], version),
+            bins: std::collections::BTreeMap::new(),
             link_type: "link".into(),
             installed_at: 1_700_000_000,
         }

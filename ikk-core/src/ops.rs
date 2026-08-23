@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::config::{Config, PackageConfig, SecurityConfig};
@@ -7,7 +8,7 @@ use crate::lock::LockFile;
 use crate::platform::Platform;
 use crate::remote::Remote;
 use crate::source::{LocalSource, RemoteSource, Source, UrlSource};
-use crate::store::Store;
+use crate::store::{Store, StorePath};
 
 /// A resolved request to install a package.
 pub struct InstallRequest<'a> {
@@ -110,9 +111,10 @@ async fn install_from_source<'a>(
     // 3. Store
     let sp = store.insert(req.name, &version, req.pkg.variant.as_deref(), &artifact)?;
 
-    // 4. Link — each package owns bin/<name>/, so author-native binary names
-    // never collide.
-    let link_type = link_bin(req.home, req.name, &sp.root)?;
+    // 4. Link — every executable in the package is symlinked into bin/, so
+    // binaries run directly from PATH no matter where the author nested them
+    // (e.g. neovim ships `bin/nvim`, llama.cpp ships `bin/llama-cli`).
+    let linked = link_executables(req.home, req.name, &sp, lock)?;
 
     // 5. Lock
     lock.insert(
@@ -123,7 +125,8 @@ async fn install_from_source<'a>(
             uri: req.pkg.uri.clone(),
             sha256: artifact.archive_hash.clone(),
             bin_entry: sp.entry_name.clone(),
-            link_type,
+            bins: linked.bins,
+            link_type: linked.link_type,
             installed_at: crate::lock::unix_now(),
         },
     );
@@ -138,10 +141,10 @@ async fn install_from_source<'a>(
 /// Validate a package name before it is interpolated into any filesystem
 /// path.
 ///
-/// Names land in `bin/<name>` and the store entry name. A name of `.`, `..`,
+/// Names land in `bin/<exe>` and the store entry name. A name of `.`, `..`,
 /// or one containing path separators would escape the ikk home — and
-/// `link_bin`/`remove` would `remove_dir_all` whatever is there. The allowed
-/// alphabet is deliberately conservative.
+/// `link_executables`/`remove` would `remove_dir_all` whatever is there. The
+/// allowed alphabet is deliberately conservative.
 #[must_use]
 pub fn is_valid_name(name: &str) -> bool {
     !name.is_empty()
@@ -155,80 +158,172 @@ pub fn validate_name(name: &str) -> Result<()> {
     if is_valid_name(name) { Ok(()) } else { Err(IkkError::InvalidPackageName(name.to_string())) }
 }
 
-/// Create `bin/<name>/` pointing at the store entry's package root.
-///
-/// Symlinks/junctions are preferred; a full copy is the degraded fallback
-/// for filesystems that don't support them. Returns the link type actually
-/// used (`"link"` or `"copy"`) so callers can record it in the lock file.
-pub fn link_bin(home: &IkkHome, name: &str, target: &Path) -> Result<String> {
-    validate_name(name)?;
-
-    // bin/ may not exist yet (e.g. CLI flow without a prior `ikk init`).
-    std::fs::create_dir_all(home.bin_dir())?;
-
-    let link = home.bin_dir().join(name);
-
-    // Remove any existing link or directory. On Windows, junctions are
-    // removed with remove_file (remove_dir_all fails on them); a failed
-    // removal falls through — mklink /J replaces existing junctions.
-    match std::fs::symlink_metadata(&link) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            let _ = std::fs::remove_file(&link);
-        }
-        Ok(_) => {
-            let _ = std::fs::remove_dir_all(&link);
-        }
-        Err(_) => {}
-    }
-
-    // Final sweep: nuke whatever is left (junction or directory) via cmd.
-    #[cfg(windows)]
-    if link.exists() {
-        let _ =
-            std::process::Command::new("cmd").args(["/C", "rmdir", "/S", "/Q"]).arg(&link).output();
-    }
-
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, &link).map_err(|e| {
-        IkkError::Store(format!("failed to create bin link {}: {e}", link.display()))
-    })?;
-
-    #[cfg(windows)]
-    if !create_junction(target, &link) {
-        tracing::warn!("junction unavailable, falling back to copy for {}", link.display());
-        crate::store::copy_dir(target, &link)?;
-        return Ok("copy".into());
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        crate::store::copy_dir(target, &link)?;
-        return Ok("copy".into());
-    }
-
-    Ok("link".into())
+/// The result of linking a package's executables into `bin/`.
+#[derive(Debug)]
+pub struct LinkedBins {
+    /// Executable name → path relative to the package root in the store.
+    pub bins: BTreeMap<String, String>,
+    /// `link` if every executable is a symlink, `copy` if any was copied
+    /// (filesystems without symlink support).
+    pub link_type: String,
 }
 
-/// Windows: create a directory junction (no admin required).
-/// Returns false when junctions are unavailable (caller falls back to copy).
+/// Link every executable in a package's store root directly into
+/// `bin/<exe>/` so the OS finds it on PATH natively.
+///
+/// This replaces the old per-package `bin/<name>/` directory link: binaries
+/// keep the names their authors chose, and packages that ship many binaries
+/// (llama.cpp, busybox, …) expose all of them. Name collisions across
+/// packages are rejected rather than silently shadowed.
+///
+/// `lock` holds the package's previously-linked names so upgrades can
+/// remove stale links and re-link without clobbering other packages.
+pub fn link_executables(
+    home: &IkkHome,
+    name: &str,
+    sp: &StorePath,
+    lock: &LockFile,
+) -> Result<LinkedBins> {
+    validate_name(name)?;
+
+    let bin_dir = home.bin_dir();
+    std::fs::create_dir_all(&bin_dir)?;
+
+    // Discover executables (recursive, so `bin/nvim` and `bin/llama-cli`
+    // are found the same as a flat `rg`).
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    collect_executables(&sp.root, &mut found);
+
+    let mut bins: BTreeMap<String, String> = BTreeMap::new();
+    for path in &found {
+        let Some(exe) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let rel = path.strip_prefix(&sp.root).map_err(|e| {
+            IkkError::Store(format!("failed to relativize {}: {e}", path.display()))
+        })?;
+        bins.insert(exe.to_string(), rel.to_string_lossy().to_string());
+    }
+
+    let previous: Vec<String> =
+        lock.get(name).map(|l| l.bins.keys().cloned().collect()).unwrap_or_default();
+
+    // Drop links for executables that no longer exist in this version.
+    for exe in &previous {
+        if !bins.contains_key(exe) {
+            remove_dir_or_link(&bin_dir.join(exe))?;
+        }
+    }
+
+    // Reject collisions before touching anything: a bin name already present
+    // and not owned by this package must never be overwritten.
+    let mut collisions = Vec::new();
+    for exe in bins.keys() {
+        let link = bin_dir.join(exe);
+        if path_present(&link) && !previous.iter().any(|p| p == exe) {
+            let owner = lock
+                .packages
+                .iter()
+                .find(|(_, l)| l.bins.contains_key(exe))
+                .map(|(n, _)| n.clone());
+            let hint = match owner {
+                Some(o) => format!(" (already provided by package '{o}')"),
+                None => " (already exists and is not managed by ikk)".to_string(),
+            };
+            collisions.push(format!("{exe}{hint}"));
+        }
+    }
+
+    if !collisions.is_empty() {
+        return Err(IkkError::Store(format!(
+            "binary name collision in {}:\n  {}\n  remove the conflicting package or rename it before retrying",
+            bin_dir.display(),
+            collisions.join("\n  ")
+        )));
+    }
+
+    let mut link_type = "link".to_string();
+
+    for (exe, rel) in &bins {
+        let link = bin_dir.join(exe);
+        if path_present(&link) {
+            remove_dir_or_link(&link)?;
+        }
+
+        match link_file(&sp.root.join(rel), &link)? {
+            LinkKind::Symlink => {}
+            LinkKind::Copy => link_type = "copy".to_string(),
+        }
+    }
+
+    Ok(LinkedBins { bins, link_type })
+}
+
+#[derive(PartialEq)]
+enum LinkKind {
+    Symlink,
+    Copy,
+}
+
+/// Link a single file, falling back to a copy when symlinks are unavailable.
+fn link_file(target: &Path, dest: &Path) -> Result<LinkKind> {
+    match crate::store::recreate_symlink(target, dest) {
+        Ok(()) => Ok(LinkKind::Symlink),
+        Err(e) => {
+            tracing::warn!("symlink unavailable ({e}); copying {} instead", dest.display());
+            std::fs::copy(target, dest)?;
+            crate::processor::set_executable(dest);
+            Ok(LinkKind::Copy)
+        }
+    }
+}
+
+/// True if a path exists, including broken symlinks (`Path::exists` follows
+/// links and reports a broken one as missing).
+fn path_present(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Is this file an executable? Mode bits on Unix, known script/binary
+/// extensions on Windows.
+#[cfg(unix)]
+pub fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
 #[cfg(windows)]
-fn create_junction(target: &Path, link: &Path) -> bool {
-    // Use `cmd /C mklink /J` for directory junctions.
-    let Ok(output) = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .output()
-    else {
-        return false;
+pub fn is_executable(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd"))
+}
+
+/// Collect every executable file under `dir` (recursive).
+///
+/// Symlinked directories are treated as leaves (not followed) so a symlink
+/// cycle in a package can never recurse forever; symlinks to executables are
+/// still collected.
+pub fn collect_executables(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
 
-    if output.status.success() {
-        true
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::debug!("mklink /J failed: {stderr}");
-        false
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let path = entry.path();
+        let meta = path.symlink_metadata();
+        let is_symlink = meta.as_ref().is_ok_and(|m| m.file_type().is_symlink());
+        let is_dir = meta.as_ref().is_ok_and(|m| m.is_dir());
+
+        if is_dir && !is_symlink {
+            collect_executables(&path, out);
+        } else if is_executable(&path) {
+            out.push(path);
+        }
     }
 }
 
@@ -245,7 +340,7 @@ fn expand_path(uri: &str) -> std::path::PathBuf {
 /// Remove a directory, symlink, or Windows junction.
 ///
 /// Windows briefly locks junctions after creation, so a failed removal gets
-/// the `cmd /C rmdir /S /Q` fallback (same as `link_bin`).
+/// the `cmd /C rmdir /S /Q` fallback (same as `link_executables`).
 fn remove_dir_or_link(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.is_symlink() => match std::fs::remove_file(path) {
@@ -276,15 +371,18 @@ fn remove_dir_or_link(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Remove a package: unlink `bin/<name>/`, remove store entry, remove lock entry.
+/// Remove a package: unlink its `bin/<exe>` entries, remove the store entry,
+/// remove the lock entry.
 pub fn remove(name: &str, home: &IkkHome, store: &Store, lock: &mut LockFile) -> Result<()> {
     validate_name(name)?;
 
-    // Unlink bin/<name>/
-    remove_dir_or_link(&home.bin_dir().join(name))?;
-
-    // Remove store entry
+    // Unlink each executable this package linked into bin/.
     if let Some(locked) = lock.get(name) {
+        for exe in locked.bins.keys() {
+            remove_dir_or_link(&home.bin_dir().join(exe))?;
+        }
+
+        // Remove store entry
         store.remove_by_entry(&locked.bin_entry)?;
     }
 
@@ -334,23 +432,107 @@ mod tests {
         (dir, home, store, lock, platform)
     }
 
+    #[cfg(unix)]
+    fn make_executable(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &std::path::Path) {}
+
+    /// Executable file name for the current platform (Windows detects
+    /// executables by extension).
+    fn tool_name() -> &'static str {
+        #[cfg(windows)]
+        {
+            "tool.exe"
+        }
+        #[cfg(not(windows))]
+        {
+            "tool"
+        }
+    }
+
     #[test]
-    fn link_bin_creates_symlink() {
-        let (_dir, home, _store, _lock, _platform) = setup("linkbin");
+    fn link_executables_creates_symlinks() {
+        let (_dir, home, store, mut lock, _platform) = setup("linkbin");
 
-        let target = home.root.join("target");
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(target.join("mytool"), b"binary").unwrap();
+        let src = home.root.join("src");
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        let tool = tool_name();
+        std::fs::write(src.join("bin").join(tool), b"binary").unwrap();
+        make_executable(&src.join("bin").join(tool));
 
-        link_bin(&home, "mytool", &target).unwrap();
+        let artifact =
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+        let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
 
-        let link = home.bin_dir().join("mytool");
-        assert!(link.exists());
-        assert!(link.join("mytool").exists());
+        let linked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+        assert_eq!(linked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
+        assert!(matches!(linked.link_type.as_str(), "link" | "copy"));
 
-        // Re-link is idempotent
-        link_bin(&home, "mytool", &target).unwrap();
-        assert!(link.join("mytool").exists());
+        // Record the link, then re-link: the existing link is owned by us.
+        lock.insert(
+            "pkg".into(),
+            crate::lock::LockedPackage {
+                version: "1.0".into(),
+                variant: None,
+                uri: "url".into(),
+                sha256: "abc".into(),
+                bin_entry: sp.entry_name.clone(),
+                bins: linked.bins,
+                link_type: linked.link_type,
+                installed_at: 0,
+            },
+        );
+
+        let relinked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+        assert_eq!(relinked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
+
+        let link = home.bin_dir().join(tool);
+        assert!(link.is_symlink() || link.is_file());
+
+        let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[test]
+    fn link_executables_rejects_collisions() {
+        let (_dir, home, store, mut lock, _platform) = setup("collision");
+
+        let src = home.root.join("src");
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        let tool = tool_name();
+        std::fs::write(src.join("bin").join(tool), b"binary").unwrap();
+        make_executable(&src.join("bin").join(tool));
+
+        let artifact =
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+        let sp = store.insert("one", "1.0", None, &artifact).unwrap();
+
+        // First package owns the executable name.
+        let linked = link_executables(&home, "one", &sp, &lock).unwrap();
+        lock.insert(
+            "one".into(),
+            crate::lock::LockedPackage {
+                version: "1.0".into(),
+                variant: None,
+                uri: "url".into(),
+                sha256: "abc".into(),
+                bin_entry: sp.entry_name.clone(),
+                bins: linked.bins,
+                link_type: linked.link_type,
+                installed_at: 0,
+            },
+        );
+
+        // A second package shipping the same name must not clobber it.
+        let artifact2 =
+            Artifact { dir: src.clone(), archive_hash: "def".into(), source_url: "url".into() };
+        let sp2 = store.insert("two", "1.0", None, &artifact2).unwrap();
+
+        let err = link_executables(&home, "two", &sp2, &lock).unwrap_err();
+        assert!(err.to_string().contains("collision"), "unexpected error: {err}");
 
         let _ = std::fs::remove_dir_all(&home.root);
     }
@@ -359,14 +541,16 @@ mod tests {
     fn remove_unlinks_and_cleans() {
         let (_dir, home, store, mut lock, _platform) = setup("removetest");
 
-        let target = home.root.join("target");
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(target.join("mytool"), b"binary").unwrap();
+        let src = home.root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let tool = tool_name();
+        std::fs::write(src.join(tool), b"binary").unwrap();
+        make_executable(&src.join(tool));
 
         let artifact =
-            Artifact { dir: target.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("mytool", "1.0", None, &artifact).unwrap();
-        link_bin(&home, "mytool", &sp.root).unwrap();
+        let linked = link_executables(&home, "mytool", &sp, &lock).unwrap();
 
         lock.insert(
             "mytool".into(),
@@ -376,14 +560,15 @@ mod tests {
                 uri: "url".into(),
                 sha256: "abc".into(),
                 bin_entry: sp.entry_name.clone(),
-                link_type: "link".into(),
+                bins: linked.bins,
+                link_type: linked.link_type,
                 installed_at: 0,
             },
         );
 
         remove("mytool", &home, &store, &mut lock).unwrap();
 
-        assert!(!home.bin_dir().join("mytool").exists());
+        assert!(!home.bin_dir().join(tool).exists());
         assert!(!sp.path.exists());
         assert!(lock.get("mytool").is_none());
 
@@ -391,19 +576,27 @@ mod tests {
     }
 
     #[test]
-    fn link_bin_and_remove_reject_traversal_names() {
+    fn link_executables_and_remove_reject_traversal_names() {
         let (_dir, home, store, mut lock, _platform) = setup("traversal");
 
-        let target = home.root.join("target");
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(target.join("tool"), b"binary").unwrap();
+        let src = home.root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let tool = tool_name();
+        std::fs::write(src.join(tool), b"binary").unwrap();
+        make_executable(&src.join(tool));
+
+        let artifact =
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+        let sp = store.insert("tool", "1.0", None, &artifact).unwrap();
 
         for bad in [".", "..", "a/../b", "", "a\\b"] {
-            assert!(link_bin(&home, bad, &target).is_err(), "link_bin accepted '{bad}'");
+            assert!(
+                link_executables(&home, bad, &sp, &lock).is_err(),
+                "link_executables accepted '{bad}'"
+            );
             assert!(remove(bad, &home, &store, &mut lock).is_err(), "remove accepted '{bad}'");
         }
 
-        // Rejected attempts must not have touched the ikk home.
         assert!(home.root.exists());
 
         let _ = std::fs::remove_dir_all(&home.root);
@@ -416,7 +609,9 @@ mod tests {
         // Build a fake local package
         let src = home.root.join("srcpkg");
         std::fs::create_dir_all(src.join("bin")).unwrap();
-        std::fs::write(src.join("bin/mytool"), b"#!/bin/sh\necho hi").unwrap();
+        let tool = tool_name();
+        std::fs::write(src.join("bin").join(tool), b"#!/bin/sh\necho hi").unwrap();
+        make_executable(&src.join("bin").join(tool));
         std::fs::write(src.join("README.md"), b"docs").unwrap();
 
         let config = Config::default();
@@ -439,14 +634,14 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(install_local(&req, &store, &mut lock)).unwrap();
 
-        // bin/mytool/ → store entry, author layout preserved
-        let linked = home.bin_dir().join("mytool");
-        assert!(linked.join("bin/mytool").exists());
-        assert!(linked.join("README.md").exists());
+        // bin/<exe> → store binary, resolved natively from PATH
+        let linked = home.bin_dir().join(tool);
+        assert!(linked.is_symlink() || linked.is_file());
 
-        // Lock recorded
+        // Lock recorded the link
         let locked = lock.get("mytool").unwrap();
         assert_eq!(locked.version, "local");
+        assert_eq!(locked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
 
         // Store verifies
         let results = store.verify_all().unwrap();

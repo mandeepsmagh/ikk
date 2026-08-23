@@ -211,7 +211,7 @@ fn safe_join(base: &Path, entry_path: &str) -> Result<PathBuf> {
 // ── permission helpers ───────────────────────────────────────────────────────
 
 #[cfg_attr(unix, expect(clippy::used_underscore_binding))]
-fn set_executable(_path: &Path) {
+pub(crate) fn set_executable(_path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -74,6 +74,10 @@ fn print_details(name: &str, ctx: &Ctx) -> Result<()> {
         println!("sha256:    {}", locked.sha256);
         println!("link:      {}", locked.link_type);
         println!("entry:     {}", locked.bin_entry);
+        if !locked.bins.is_empty() {
+            let names = locked.bins.keys().cloned().collect::<Vec<_>>().join(", ");
+            println!("binaries:  {names}");
+        }
     } else {
         println!();
         println!("status:    not installed — run 'ikk sync'");

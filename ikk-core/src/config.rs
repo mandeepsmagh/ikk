@@ -47,6 +47,13 @@ pub struct Config {
 /// build from elsewhere — no other code references a hardcoded repo.
 pub const DEFAULT_SELF_UPDATE_REPO: &str = "mandeepsmagh/ikk";
 
+/// serde fallback used when `[defaults].self_update_repo` is absent from an
+/// existing config — the default publishing repo, so `ikk self-update` works
+/// out of the box even for configs written before the field existed.
+fn default_self_update_repo() -> String {
+    DEFAULT_SELF_UPDATE_REPO.to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Defaults {
     /// Default source host used for `owner/repo` shorthand.
@@ -55,6 +62,7 @@ pub struct Defaults {
     /// Repository that publishes the ikk binary itself, in `owner/repo`
     /// form. Used by `ikk self-update`; change it to point at a fork or
     /// alternate forge.
+    #[serde(default = "default_self_update_repo")]
     pub self_update_repo: String,
 }
 
@@ -423,6 +431,27 @@ mod tests {
         let security = SecurityConfig { min_release_age_days: 3 };
 
         assert!(!security.is_old_enough(None));
+    }
+
+    #[test]
+    fn missing_self_update_repo_defaults() {
+        // A config written before `self_update_repo` existed (or by another
+        // process) must still load, with self-update pointed at the default.
+        let tmp = std::env::temp_dir().join("ikk_test_missing_repo.toml");
+
+        let contents = r#"
+[defaults]
+remote = "github.com"
+"#;
+
+        std::fs::write(&tmp, contents).unwrap();
+
+        let config = Config::load(&tmp).unwrap();
+
+        assert_eq!(config.defaults.remote.as_deref(), Some("github.com"));
+        assert_eq!(config.defaults.self_update_repo, DEFAULT_SELF_UPDATE_REPO);
+
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

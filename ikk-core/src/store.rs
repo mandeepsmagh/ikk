@@ -9,6 +9,12 @@ pub struct Store {
     root: PathBuf,
 }
 
+/// Directory inside each store entry that holds the package root.
+///
+/// Historically named `bin`, but it is the whole package tree — not just the
+/// executables, which may live anywhere within it (e.g. neovim ships `bin/nvim`).
+const PACKAGE_DIR: &str = "bin";
+
 /// Exclusive store lock — released on drop.
 pub struct StoreLock {
     _file: std::fs::File,
@@ -28,7 +34,7 @@ pub struct StorePath {
     pub entry_name: String,
     /// Path to the entry directory.
     pub path: PathBuf,
-    /// Package root inside the entry: `{path}/bin`.
+    /// Package root inside the entry: `{path}/{PACKAGE_DIR}`.
     pub root: PathBuf,
 }
 
@@ -85,6 +91,13 @@ impl Store {
         self.root.join(Self::entry_name(name, version, variant, content_hash))
     }
 
+    /// Package root inside a store entry, given the entry's directory name
+    /// (the `bin_entry` recorded in ikk.lock).
+    #[must_use]
+    pub fn package_root(&self, entry_name: &str) -> PathBuf {
+        self.root.join(entry_name).join(PACKAGE_DIR)
+    }
+
     /// Insert an artifact as a content-addressed entry. Idempotent — skips if
     /// the same content is already stored.
     pub fn insert(
@@ -107,7 +120,7 @@ impl Store {
                 version: version.to_string(),
                 variant: variant.map(String::from),
                 entry_name,
-                root: entry.join("bin"),
+                root: entry.join(PACKAGE_DIR),
                 path: entry,
             });
         }
@@ -124,17 +137,17 @@ impl Store {
                     version: version.to_string(),
                     variant: variant.map(String::from),
                     entry_name,
-                    root: entry.join("bin"),
+                    root: entry.join(PACKAGE_DIR),
                     path: entry,
                 });
             }
             Err(e) => return Err(e.into()),
         }
 
-        // Copy the package root into the entry under 'bin', then write
+        // Copy the package root into the entry under PACKAGE_DIR, then write
         // meta.toml. On any failure, remove the partial entry so a broken
         // install never leaves a half-written store dir behind.
-        let root = entry.join("bin");
+        let root = entry.join(PACKAGE_DIR);
         let populate = (|| -> Result<()> {
             copy_dir_contents(&artifact.dir, &root)?;
 
@@ -231,7 +244,7 @@ impl Store {
             let meta: StoreMeta = toml::from_str(&std::fs::read_to_string(&meta_path)?)
                 .map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?;
 
-            let root = entry.path().join("bin");
+            let root = entry.path().join(PACKAGE_DIR);
             if !root.exists() {
                 results.push(VerifyResult::Missing(meta.name));
                 continue;
@@ -265,11 +278,6 @@ pub enum VerifyResult {
 #[must_use]
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-/// Copy a directory tree recursively. Public for Windows fallback use.
-pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    copy_dir_contents(src, dst)
 }
 
 /// Compute a deterministic hash of a directory's contents.
@@ -339,7 +347,7 @@ pub(crate) fn copy_dir_contents(src: &Path, dest_dir: &Path) -> Result<()> {
 ///
 /// Windows needs to know whether the target is a directory. The caller falls
 /// back to a dereferenced copy if symlink creation is unavailable.
-fn recreate_symlink(target: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn recreate_symlink(target: &Path, dest: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(target, dest)

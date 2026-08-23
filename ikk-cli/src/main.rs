@@ -55,7 +55,7 @@ enum Command {
     #[command(visible_alias = "ls")]
     List(list::ListArgs),
 
-    /// Run a binary from a multi-file package directory
+    /// Run a binary from an installed package root
     Run(run::RunArgs),
 
     /// Get or set config values

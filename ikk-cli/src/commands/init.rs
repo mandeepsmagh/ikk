@@ -53,16 +53,43 @@ pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
         if args.silent { args.remote.clone() } else { prompt_remote(args.remote.as_deref())? };
 
     let config_path = home.config_file();
-    if config_path.exists() {
-        println!("config already exists — skipping");
-    } else {
-        let mut config = Config::default();
-        config.defaults.remote.clone_from(&remote);
-        // Self-update points at the default publishing repo by default; users
-        // can edit that one line in ikk.toml to use a fork or another forge.
+    let created = !config_path.exists();
+
+    let mut config = if created { Config::default() } else { Config::load(&config_path)? };
+
+    // `self_update_repo` is always set by default — and persisted, not just
+    // defaulted in memory — so it's visible and editable in ikk.toml. Backfill
+    // it if a config was created elsewhere (or by an older ikk) without it.
+    // A user-set value (e.g. a fork) is never touched.
+    let had_repo = created
+        || std::fs::read_to_string(&config_path)
+            .map(|s| s.contains("self_update_repo"))
+            .unwrap_or(false);
+
+    let mut changed = created || !had_repo;
+    if config.defaults.self_update_repo.trim().is_empty() {
         config.defaults.self_update_repo = DEFAULT_SELF_UPDATE_REPO.to_string();
+        changed = true;
+    }
+
+    // Backfill the default remote if one was supplied and none is set yet.
+    // An existing remote is left alone (explicitly configured by the user).
+    if let Some(r) = &remote
+        && config.defaults.remote.is_none()
+    {
+        config.defaults.remote = Some(r.clone());
+        changed = true;
+    }
+
+    if changed {
         config.save(&config_path)?;
-        println!("created {}", config_path.display());
+        if created {
+            println!("created {}", config_path.display());
+        } else {
+            println!("updated {}", config_path.display());
+        }
+    } else {
+        println!("config already up to date — {}", config_path.display());
     }
 
     if !args.no_shell {
@@ -81,13 +108,12 @@ pub fn run(args: InitArgs, home: &IkkHome) -> Result<()> {
 
     println!("\nikk is ready.");
 
-    if let Some(r) = &remote {
-        println!("default remote: {r}");
-    } else {
-        println!("no default remote set — specify host in each package URI");
+    match &config.defaults.remote {
+        Some(r) => println!("default remote: {r}"),
+        None => println!("no default remote set — specify host in each package URI"),
     }
 
-    println!("self-update repo: {} (edit in ikk.toml to change)", DEFAULT_SELF_UPDATE_REPO);
+    println!("self-update repo: {} (edit in ikk.toml to change)", config.defaults.self_update_repo);
 
     if !args.silent {
         println!("\nrestart your shell or run:");

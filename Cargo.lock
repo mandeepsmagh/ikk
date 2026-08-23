@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "ikk-cli"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "ikk-core"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async-trait",

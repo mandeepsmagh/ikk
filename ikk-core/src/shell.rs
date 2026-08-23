@@ -94,29 +94,20 @@ impl Shell {
 
 /// Generate the PATH export lines for a shell profile.
 ///
-/// Each installed package gets its own `bin/<name>/` directory on PATH, so
-/// binaries keep the names their authors chose and packages can never
-/// collide.
+/// Only `~/.ikk/bin` goes on PATH: it holds one symlink per installed
+/// executable, so binaries keep their author-chosen names and the OS resolves
+/// them natively.
 pub fn path_exports(home: &IkkHome, shell: &str) -> Vec<String> {
-    let bin_dir = home.bin_dir();
-    let bin = bin_dir.display().to_string();
+    let bin = home.bin_dir().display().to_string();
 
     match shell {
-        "zsh" | "bash" => vec![
-            format!("[ -d {bin} ] && export PATH=\"${{PATH:-}}:{bin}\""),
-            format!(
-                "[ -d {bin} ] && for d in {bin}/*/; do [ -d \"$d\" ] && export PATH=\"${{PATH:-}}:$d\"; done"
-            ),
-        ],
-        "fish" => vec![format!(
-            "[ -d {bin} ]; and for d in {bin}/*/; [ -d $d ]; and set -gx PATH $PATH $d; end"
-        )],
+        "zsh" | "bash" => {
+            vec![format!("[ -d {bin} ] && export PATH=\"${{PATH:-}}:{bin}\"")]
+        }
+        "fish" => vec![format!("[ -d {bin} ]; and set -gx PATH $PATH {bin}")],
         "nushell" => vec![format!(r#"$env.PATH = ($env.PATH | prepend "{bin}")"#)],
         "powershell" | "pwsh" => {
-            let bin = bin_dir.display().to_string();
-            vec![format!(
-                r#"if (Test-Path '{bin}') {{ $env:PATH = '{bin};' + $env:PATH; Get-ChildItem -Directory '{bin}' | ForEach-Object {{ $env:PATH = $_.FullName + ';' + $env:PATH }} }}"#
-            )]
+            vec![format!(r#"if (Test-Path '{bin}') {{ $env:PATH = '{bin};' + $env.PATH }}"#)]
         }
         _ => vec![],
     }
@@ -202,13 +193,12 @@ mod tests {
     use crate::home::IkkHome;
 
     #[test]
-    fn zsh_exports_bin_and_subdirs() {
+    fn zsh_exports_bin_dir() {
         let home = IkkHome::new(std::env::temp_dir().join("ikk_test_shell"));
         let lines = path_exports(&home, "zsh");
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("export PATH"));
         assert!(lines[0].contains("bin"));
-        assert!(lines[1].contains("for d in"));
     }
 
     #[test]
