@@ -3,6 +3,8 @@ use anyhow::Result;
 use clap::Args;
 use ikk_core::{config::PackageMode, home::IkkHome, ops, remote::RemoteRegistry};
 
+use super::sync::resolve_version_dry;
+
 #[derive(Args)]
 pub struct UpgradeArgs {
     /// Upgrade a specific package (all if not set)
@@ -45,6 +47,23 @@ pub async fn run(args: UpgradeArgs, home: &IkkHome) -> Result<()> {
         // pinned version.
         if args.force && matches!(pkg.version.as_deref(), Some(v) if v != "latest") {
             pkg.version = None;
+        }
+
+        // Skip the download when the package is already at the version an
+        // upgrade would install (same resolved version), so `ikk upgrade` is
+        // idempotent without re-downloading unchanged artifacts. Pinned
+        // versions are a local check; `latest` does one API call to compare.
+        if let Some(locked) = ctx.lock.get(name)
+            && locked.uri == pkg.uri
+            && locked.variant == pkg.variant
+        {
+            let resolved = resolve_version_dry(name, &pkg, &ctx.config, &ctx.registry).await?;
+            if let Some(resolved) = resolved
+                && resolved == locked.version
+            {
+                println!("  {name}: already up to date");
+                continue;
+            }
         }
 
         let before = ctx.lock.get(name).map(|locked| locked.version.clone());

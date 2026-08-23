@@ -1,24 +1,21 @@
 # HANDOFF — ikk
 
-**Last session:** 2026-08-23 — flat `bin/` executable links + `self_update_repo` defaulting. Implemented, not yet committed.
+**Last session:** 2026-08-23 — `ikk sync` / `ikk upgrade` no longer re-download in-sync packages; releasing `v0.8.6`.
 
 ## State
 
-- **Flat `~/.ikk/bin` layout** replaces the per-package `bin/<name>/` directory link:
-  - `ops::link_executables` recursively scans a package's store root for executables and symlinks each into `~/.ikk/bin/<exe>`. Windows uses file symlinks with a `std::fs::copy` fallback (link_type `"copy"`).
-  - Name collisions across packages are rejected — the error names the package that already owns the binary.
-  - `ikk.lock` records `bins` (exe → path relative to the package root) per package and hashes it into the merkle leaf.
-  - `ikk run` resolves the package root from `store/<bin_entry>/bin`; there is no per-package dir anymore.
-  - `ikk check` also verifies each `bin/<exe>` symlink points at its store binary.
-  - `shell.rs` PATH integration now adds only `~/.ikk/bin`.
-- **`self_update_repo` fixed**: `Defaults.self_update_repo` has a serde default, so a config missing the key loads as `mandeepsmagh/ikk`; `ikk init` backfills **and persists** it when the key is absent from an existing config (and never overwrites a user-set value).
-- Gates green locally: `cargo fmt`, `clippy --all-targets -D warnings`, `cargo test` (69 core + 10 CLI + 1 real-world).
-- `install.sh` / `install.ps1`: **no changes needed** — both already install `ikk` into `~/.ikk/bin` and defer PATH to `ikk init` (ps1 additionally sets User PATH directly, a pre-existing inconsistency).
+- `v0.8.5` is out (flat `~/.ikk/bin` executable links + `self_update_repo` defaulting — see `c067ee4`).
+- **This session (uncommitted):** `sync_package` and `upgrade` now skip the artifact download when the package is already in sync (same `uri`/`variant` and resolved version == locked version):
+  - Pinned version → pure local check, no network.
+  - `latest` → one API call to compare; download only if a newer release exists.
+  - Shared resolver `resolve_version_dry` moved to `pub(crate)` in `sync.rs`, reused by `upgrade.rs`.
+  - Test added: `sync_skips_download_when_pinned_version_in_sync` (CLI). `upgrade`'s skip is only reachable for `latest` packages (pinned packages are skipped earlier by `skip_pinned`), so it has no offline unit test.
+- Version bumped to `0.8.6` (both crates + `Cargo.lock`).
+- Gates green locally: `cargo fmt`, `clippy --all-targets -D warnings`, `cargo test` (69 core + 11 CLI + 1 real-world).
 
 ## Next session
 
-- Commit this change; bump the version if it ships as a release.
-- If releasing: this is a breaking layout/lock change vs v0.8.4 — existing installs should re-run `ikk sync` after upgrade. No backward-compat shims required (owner confirmed greenfield).
+- Commit + tag `v0.8.6` to ship (release workflow builds all 6 assets + runs the CLI e2e gate).
 
 ## Broken boundaries / known flakes
 

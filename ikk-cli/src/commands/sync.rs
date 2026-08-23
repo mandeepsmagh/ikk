@@ -98,7 +98,7 @@ async fn sync_package_dry(
 /// Best-effort resolution of the version a sync would install, without
 /// downloading. `Ok(None)` = not determinable (e.g. local source, template
 /// source without a version pin) — the caller reports "already in sync".
-async fn resolve_version_dry(
+pub(crate) async fn resolve_version_dry(
     name: &str,
     pkg: &PackageConfig,
     config: &ikk_core::config::Config,
@@ -137,6 +137,24 @@ async fn resolve_version_dry(
 }
 
 async fn sync_package(name: &str, pkg: &PackageConfig, ctx: &mut Ctx) -> Result<bool> {
+    // Skip the download when the package is already in sync: same source and
+    // same resolved version. This keeps `ikk sync` idempotent without
+    // re-downloading large artifacts on every run. For a pinned version this
+    // is a pure local check; for `latest` it still does one lightweight API
+    // call to compare versions (no artifact download unless a newer release
+    // exists).
+    if let Some(locked) = ctx.lock.get(name)
+        && locked.uri == pkg.uri
+        && locked.variant == pkg.variant
+    {
+        let resolved = resolve_version_dry(name, pkg, &ctx.config, &ctx.registry).await?;
+        if let Some(resolved) = resolved
+            && resolved == locked.version
+        {
+            return Ok(false);
+        }
+    }
+
     let mode = ctx.config.package_mode(pkg);
 
     let req = ops::InstallRequest {
@@ -210,4 +228,84 @@ fn print_report(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ikk_core::{
+        config::Config,
+        home::IkkHome,
+        lock::{LockFile, LockedPackage},
+        platform::Platform,
+        registry::ConfigRegistry,
+        store::Store,
+    };
+
+    fn ctx_with(
+        name: &str,
+        pkg: PackageConfig,
+        locked: LockedPackage,
+    ) -> (std::path::PathBuf, Ctx) {
+        let dir = std::env::temp_dir().join(format!("ikk_sync_test_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = IkkHome::new(dir.join(".ikk"));
+        home.init_dirs().unwrap();
+
+        let mut config = Config::default();
+        config.defaults.remote = Some("github.com".into());
+        config.packages.insert(name.into(), pkg);
+
+        let mut lock = LockFile::load(&home.lock_file()).unwrap();
+        lock.insert(name.into(), locked);
+
+        let http = reqwest::Client::new();
+        let ctx = Ctx {
+            home: home.clone(),
+            config,
+            lock,
+            store: Store::open(home.store_dir()).unwrap(),
+            platform: Platform::current(),
+            registry: ConfigRegistry::new(vec![], http.clone()).unwrap(),
+            http,
+            store_lock: None,
+        };
+
+        (dir, ctx)
+    }
+
+    #[tokio::test]
+    async fn sync_skips_download_when_pinned_version_in_sync() {
+        let pkg = PackageConfig {
+            uri: "BurntSushi/ripgrep".into(),
+            version: Some("14.1.1".into()),
+            variant: None,
+            build: None,
+            sha256: None,
+        };
+        let locked = LockedPackage {
+            version: "14.1.1".into(),
+            variant: None,
+            uri: "BurntSushi/ripgrep".into(),
+            sha256: "abc".into(),
+            bin_entry: "abcdef123456-ripgrep-14.1.1".into(),
+            bins: Default::default(),
+            link_type: "link".into(),
+            installed_at: 0,
+        };
+
+        let (dir, mut ctx) = ctx_with("ripgrep", pkg.clone(), locked);
+
+        let changed = sync_package("ripgrep", &pkg, &mut ctx).await.unwrap();
+        assert!(!changed, "in-sync package must not reinstall");
+
+        // Nothing was written to the store (no download happened).
+        let entries = std::fs::read_dir(ctx.store.root())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .collect::<Vec<_>>();
+        assert!(entries.is_empty(), "store should be empty after a skip");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
