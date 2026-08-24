@@ -304,13 +304,15 @@ mod tests {
     /// `extract_binary` must return the wrapped executable, not the archive.
     #[test]
     fn extract_binary_unpacks_release_archive() {
+        let exe_name = if cfg!(windows) { "ikk.exe" } else { "ikk" };
+
         let mut tar_bytes = Vec::new();
         {
             let mut ar = tar::Builder::new(&mut tar_bytes);
             let mut h = tar::Header::new_gnu();
             h.set_size(12);
             h.set_mode(0o755);
-            ar.append_data(&mut h, "ikk", b"real-binary!".as_slice()).unwrap();
+            ar.append_data(&mut h, exe_name, b"real-binary!".as_slice()).unwrap();
             ar.finish().unwrap();
         }
 
@@ -319,7 +321,8 @@ mod tests {
         gz.write_all(&tar_bytes).unwrap();
         let archive = gz.finish().unwrap();
 
-        let out = extract_binary(&archive, "ikk-darwin-aarch64.tar.gz").unwrap();
+        let asset_name = "ikk-darwin-aarch64.tar.gz";
+        let out = extract_binary(&archive, asset_name).unwrap();
         assert_eq!(out, b"real-binary!");
     }
 }

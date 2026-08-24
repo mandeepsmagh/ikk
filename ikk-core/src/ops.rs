@@ -337,13 +337,15 @@ fn expand_path(uri: &str) -> std::path::PathBuf {
     }
 }
 
-/// Remove a directory, symlink, or Windows junction.
+/// Remove a directory, regular file, symlink, or Windows junction.
 ///
-/// Windows briefly locks junctions after creation, so a failed removal gets
-/// the `cmd /C rmdir /S /Q` fallback (same as `link_executables`).
+/// The flat `bin/` layout can contain either symlinks (`link` type) or
+/// plain-file copies (`copy` fallback on filesystems without symlink
+/// support) — both must unlink cleanly. Windows briefly locks junctions
+/// after creation, so a failed removal gets the `cmd /C rmdir /S /Q` fallback.
 fn remove_dir_or_link(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_symlink() => match std::fs::remove_file(path) {
+        Ok(meta) if meta.is_symlink() || meta.is_file() => match std::fs::remove_file(path) {
             Ok(()) => return Ok(()),
             // Windows briefly locks junctions after creation; fall through to rmdir.
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
@@ -573,6 +575,24 @@ mod tests {
         assert!(lock.get("mytool").is_none());
 
         let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[test]
+    fn remove_dir_or_link_handles_copy_fallback_file() {
+        let tmp = std::env::temp_dir().join(format!("ikk_remove_file_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let f = tmp.join("tool");
+        std::fs::write(&f, b"binary").unwrap();
+
+        // The flat bin/ layout may hold a plain-file copy (Windows without
+        // Developer Mode); remove_dir_or_link must unlink it, not treat it as
+        // a directory.
+        remove_dir_or_link(&f).unwrap();
+        assert!(!f.exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
