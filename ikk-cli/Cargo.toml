@@ -16,3 +16,7 @@ tracing            = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest            = { workspace = true }
 url.workspace = true
+
+[dev-dependencies]
+flate2 = "1"
+tar = "0.4"

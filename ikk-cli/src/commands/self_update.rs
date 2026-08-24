@@ -113,7 +113,8 @@ pub async fn run(args: SelfUpdateArgs, home: &IkkHome) -> Result<()> {
         }
     }
 
-    replace_binary(&bytes).context("failed to replace the ikk binary")?;
+    replace_binary(&extract_binary(&bytes, &asset.name)?)
+        .context("failed to replace the ikk binary")?;
 
     println!("ikk updated to {}", release.version);
     Ok(())
@@ -161,12 +162,32 @@ async fn fetch_expected_sha256(
     Ok(None)
 }
 
+/// Extract the `ikk` binary from a downloaded release archive.
+///
+/// Release assets are `ikk-{os}-{arch}.tar.gz` (Unix) or
+/// `ikk-windows-{arch}.zip` (Windows), each wrapping a single `ikk`/`ikk.exe`
+/// executable. Self-update must unpack that binary before swapping it in —
+/// writing the archive bytes themselves is what previously produced a broken
+/// `ikk` after an otherwise-successful self-update.
+fn extract_binary(archive: &[u8], asset_name: &str) -> Result<Vec<u8>> {
+    let stage = std::env::temp_dir().join(format!("ikk_selfupdate_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&stage);
+    std::fs::create_dir_all(&stage)?;
+
+    let dir = ikk_core::processor::extract_dir(archive, asset_name, &stage)?;
+    let exe_name = if cfg!(windows) { "ikk.exe" } else { "ikk" };
+    let bytes = std::fs::read(dir.join(exe_name))
+        .with_context(|| format!("release archive is missing '{exe_name}'"))?;
+
+    let _ = std::fs::remove_dir_all(&stage);
+    Ok(bytes)
+}
+
 /// Replace the running binary in place.
 ///
 /// Pattern (the one used by rustup/scoop self-updates): write the new bytes
 /// to `{exe}.new`, rename the running exe to `{exe}.old`, then rename the new
-/// file into the freed path. This works on every OS:
-///
+/// file into the freed path. This works on every OS:///
 /// - Windows: a running exe cannot be unlinked or renamed *over* (error 32),
 ///   but renaming it *away* is allowed — the lock follows the file to
 ///   `{exe}.old` and the path is freed for the new binary.
@@ -276,5 +297,29 @@ mod tests {
         sweep_stale_update_files_for(&exe);
         assert!(!old.exists());
         assert_eq!(std::fs::read(&exe).unwrap(), b"new-binary");
+    }
+
+    /// Regression: self-update used to write the downloaded `.tar.gz` (the
+    /// release asset) directly as the `ikk` binary, leaving a broken install.
+    /// `extract_binary` must return the wrapped executable, not the archive.
+    #[test]
+    fn extract_binary_unpacks_release_archive() {
+        let mut tar_bytes = Vec::new();
+        {
+            let mut ar = tar::Builder::new(&mut tar_bytes);
+            let mut h = tar::Header::new_gnu();
+            h.set_size(12);
+            h.set_mode(0o755);
+            ar.append_data(&mut h, "ikk", b"real-binary!".as_slice()).unwrap();
+            ar.finish().unwrap();
+        }
+
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        gz.write_all(&tar_bytes).unwrap();
+        let archive = gz.finish().unwrap();
+
+        let out = extract_binary(&archive, "ikk-darwin-aarch64.tar.gz").unwrap();
+        assert_eq!(out, b"real-binary!");
     }
 }

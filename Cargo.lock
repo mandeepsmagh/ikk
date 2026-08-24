@@ -923,8 +923,10 @@ version = "0.8.6"
 dependencies = [
  "anyhow",
  "clap",
+ "flate2",
  "ikk-core",
  "reqwest",
+ "tar",
  "tokio",
  "tracing",
  "tracing-subscriber",
