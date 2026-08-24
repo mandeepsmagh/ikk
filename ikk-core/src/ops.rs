@@ -202,6 +202,10 @@ pub fn link_executables(
         let rel = path.strip_prefix(&sp.root).map_err(|e| {
             IkkError::Store(format!("failed to relativize {}: {e}", path.display()))
         })?;
+        // Only expose real binaries; see `is_path_exported`.
+        if !is_path_exported(rel) {
+            continue;
+        }
         bins.insert(exe.to_string(), rel.to_string_lossy().to_string());
     }
 
@@ -325,6 +329,23 @@ pub fn collect_executables(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// Whether an executable (path relative to the package root) should be
+/// exposed on PATH. Only real binaries qualify: at the package root, or
+/// inside a directory named `bin`. Everything else — e.g. neovim's executable
+/// `*.so` parser libs and `less.sh` under `lib/`/`share/` — is reachable via
+/// `ikk run` but must not pollute `~/.ikk/bin`.
+fn is_path_exported(rel: &Path) -> bool {
+    let mut comps = rel.components();
+    if comps.next().is_none() {
+        return false;
+    }
+    // Exactly one component → binary sits at the package root.
+    if comps.clone().next().is_none() {
+        return true;
+    }
+    rel.components().any(|c| c.as_os_str() == "bin")
 }
 
 fn expand_path(uri: &str) -> std::path::PathBuf {
@@ -494,6 +515,37 @@ mod tests {
 
         let link = home.bin_dir().join(tool);
         assert!(link.is_symlink() || link.is_file());
+
+        let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[test]
+    fn link_executables_skips_lib_and_share() {
+        let (_dir, home, store, lock, _platform) = setup("skipnolink");
+
+        // neovim-style layout: bin/nvim (link), lib/*.so + share/*.sh (skip).
+        let src = home.root.join("src");
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::create_dir_all(src.join("lib/nvim/parser")).unwrap();
+        std::fs::create_dir_all(src.join("share/scripts")).unwrap();
+
+        let tool = tool_name();
+        std::fs::write(src.join("bin").join(tool), b"bin-binary").unwrap();
+        make_executable(&src.join("bin").join(tool));
+
+        std::fs::write(src.join("lib/nvim/parser/c.so"), b"lib").unwrap();
+        make_executable(&src.join("lib/nvim/parser/c.so"));
+        std::fs::write(src.join("share/scripts/less.sh"), b"script").unwrap();
+        make_executable(&src.join("share/scripts/less.sh"));
+
+        let artifact =
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+        let sp = store.insert("neovim", "1.0", None, &artifact).unwrap();
+
+        let linked = link_executables(&home, "neovim", &sp, &lock).unwrap();
+        assert_eq!(linked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
+        assert!(!home.bin_dir().join("c.so").exists());
+        assert!(!home.bin_dir().join("less.sh").exists());
 
         let _ = std::fs::remove_dir_all(&home.root);
     }

@@ -4,6 +4,7 @@
 
 ## State
 
+- **This session (uncommitted → committing now):** `link_executables` now links only executables at the package root or inside a `bin/` directory (`is_path_exported`). This stops neovim's executable `*.so` parsers and `less.sh` (under `lib/`/`share/`) from polluting `~/.ikk/bin`. Nix-style: flat per-executable symlinks, only `bin/` + root. Test added: `link_executables_skips_lib_and_share`.
 - `v0.8.7` tagged (this session). Contains, since `v0.8.6`:
   - `d6765ff` — self-update binary swap via rename-aside on all platforms (rustup/scoop pattern).
   - `643d59d` — self-update extracts the `ikk`/`ikk.exe` binary from the release archive before swapping (previously wrote the archive bytes as the executable — the macOS "broken after self-update" bug).
@@ -11,7 +12,7 @@
 - Known unverified (needs real machine, not reproducible in CI):
   - Windows: `ikk self-update` while `ikk.exe` is actually locked (error 32 path). GitHub Windows runners have Developer Mode, so the symlink fallback path is never exercised in CI either.
   - macOS: full `self-update` replace — owner is testing this on a real Mac (reinstall `0.8.7` via `install.sh`, then future self-updates use the fixed code).
-- Gates green locally: `cargo fmt`, `clippy --all-targets -D warnings`, `cargo test` (69 core + 13 CLI + 1 real-world).
+- Gates green locally: `cargo fmt`, `clippy --all-targets -D warnings`, `cargo test` (71 core + 13 CLI + 1 real-world).
 
 ## Bootstrap caveat (important)
 
