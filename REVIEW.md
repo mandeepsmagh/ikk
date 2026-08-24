@@ -1,6 +1,32 @@
-# REVIEW
+## Architectural Review (2026-08-24)
 
-## macOS release asset fix (2026-08-22)
+**Verdict:** A-tier. Architecture is highly disciplined, following "Senior Engineer" principles (minimal, non-speculative). The code is robust, but there are opportunities to move toward "S-tier" by increasing composability and decoupling core logic from the filesystem layout.
+
+### Strengths
+- **Minimalist:** No "speculative generality." Uses exactly the right amount of abstraction (e.g., `Source` and `Remote` traits).
+- **Security-First:** Strong emphasis on hash verification, name validation, and collision detection.
+- **Error Handling:** Centralized, structured error types via `thiserror`.
+
+### Opportunities for Improvement (Towards S-tier)
+
+#### 1. Pipeline Composability (in `ops.rs`)
+- **Observation:** `install_from_source` is currently a monolithic "God Function" that orchestrates the entire lifecycle (resolve $\rightarrow$ fetch $\rightarrow$ process $\rightarrow$ store $\rightarrow$ link $\rightarrow$ lock).
+- **Goal:** Transform the installation into a sequence of composable stages (e.g., a `Pipeline<T>` or a list of `Stage` trait objects). This would allow users or future developers to inject custom stages (e.g., `PostInstallScriptStage`) without modifying the core orchestration logic.
+
+#### 2. Decoupling from `IkkHome` (Principle of Least Privilege)
+- **Observation:** Many core functions (e.g., `link_executables`, `remove`, `install_from_source`) accept a reference to the entire `IkkHome` struct.
+- **Goal:** Functions should only receive the specific paths they need to operate on (e.g., `bin_dir: &Path`, `store_dir: &Path`). This makes the core library more composable and easier to use in non-standard environments (like testing with a virtual filesystem) without constructing a full `IkkHome` object.
+
+#### 3. Error Domain Granularity
+- **Observation:** `IkkError` is a flat, comprehensive enum. As the project grows, this will become a massive, hard-to-maintain list.
+- **Goal:** Implement "Error Nesting." Use sub-enums for different domains (e.g., `IkkError::Store(StoreError)`, `IkkError::Remote(RemoteError)`). This maintains a clean top-level API while allowing modules to define their own granular error logic.
+
+#### 4. Test Isolation
+- **Observation:** Most core tests are integration tests that rely on `std::fs` and temporary directories.
+- **Goal:** Move more business logic into pure functions that operate on data/strings rather than paths. For complex filesystem logic, consider a VFS (Virtual File System) abstraction to allow for fast, deterministic, and highly isolated unit testing.
+
+---
+
 
 **Found:** the published macOS assets (arm64 + x86_64) were dynamically linked against Homebrew's `liblzma` (`/opt/homebrew/opt/xz/lib/liblzma.5.dylib`). The GitHub `macos-latest` runner ships Homebrew `xz`, so `lzma-sys` linked against it and baked the Homebrew path into the binary. On any Mac without Homebrew `xz` at that path the binary crashes at launch: `dyld: Library not loaded: /opt/homebrew/opt/xz/lib/liblzma.5.dylib`.
 
