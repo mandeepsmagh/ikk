@@ -1,26 +1,24 @@
 # HANDOFF — ikk
 
-**Last session:** 2026-08-24 — fixed `self-update` (tarball extraction + copy-fallback removal), releasing `v0.8.7`.
+**Last session:** 2026-08-24 — `v0.8.8`: link only `bin/` + root executables (Nix-style), fixes PATH pollution.
 
 ## State
 
-- **This session (uncommitted → committing now):** `link_executables` now links only executables at the package root or inside a `bin/` directory (`is_path_exported`). This stops neovim's executable `*.so` parsers and `less.sh` (under `lib/`/`share/`) from polluting `~/.ikk/bin`. Nix-style: flat per-executable symlinks, only `bin/` + root. Test added: `link_executables_skips_lib_and_share`.
-- `v0.8.7` tagged (this session). Contains, since `v0.8.6`:
-  - `d6765ff` — self-update binary swap via rename-aside on all platforms (rustup/scoop pattern).
-  - `643d59d` — self-update extracts the `ikk`/`ikk.exe` binary from the release archive before swapping (previously wrote the archive bytes as the executable — the macOS "broken after self-update" bug).
-  - `5f24e58` — `remove_dir_or_link` unlinks plain-file copies (Windows copy fallback), plus the Windows test fix.
-- Known unverified (needs real machine, not reproducible in CI):
-  - Windows: `ikk self-update` while `ikk.exe` is actually locked (error 32 path). GitHub Windows runners have Developer Mode, so the symlink fallback path is never exercised in CI either.
-  - macOS: full `self-update` replace — owner is testing this on a real Mac (reinstall `0.8.7` via `install.sh`, then future self-updates use the fixed code).
+- `v0.8.8` tagged (this session). Since `v0.8.7`:
+  - `a2419eb` — `link_executables` exposes only executables at the package root or inside a `bin/` dir (`is_path_exported`). Neovim's executable `*.so` parsers and `less.sh` (under `lib/`/`share/`) no longer pollute `~/.ikk/bin`. Regression test `link_executables_skips_lib_and_share`.
+- `v0.8.7` carried the self-update fixes: rename-aside swap (`d6765ff`), extract binary from release archive (`643d59d`), copy-fallback removal (`5f24e58`).
+- Still unverified on a real machine (not reproducible in CI):
+  - macOS: full `ikk self-update` replace — owner is testing (reinstall `0.8.8` via `install.sh`, then future self-updates use the fixed code).
+  - Windows: `ikk self-update` while `ikk.exe` is actually locked. GitHub Windows runners have Developer Mode, so the file-symlink fallback is not exercised in CI either.
 - Gates green locally: `cargo fmt`, `clippy --all-targets -D warnings`, `cargo test` (71 core + 13 CLI + 1 real-world).
 
 ## Bootstrap caveat (important)
 
-- Self-update runs the **currently installed** binary's code. An install of `<= 0.8.6` still has the tarball bug, so upgrading `0.8.6 → 0.8.7` *via `ikk self-update`* would still brick it. Users on `<= 0.8.6` must reinstall once via `install.sh` (or otherwise place the fixed binary), then self-update is safe going forward.
+- Self-update runs the **currently installed** binary's code. Installs `<= 0.8.6` still have the tarball bug, so upgrading via `ikk self-update` would brick them. Reinstall once via `install.sh`, then self-update is safe going forward.
 
 ## Next session
 
-- Owner confirms macOS test; then Windows real-machine test; if both good, self-update is considered verified.
+- Owner confirms macOS self-update test; then Windows real-machine test.
 
 ## Broken boundaries / known flakes
 
