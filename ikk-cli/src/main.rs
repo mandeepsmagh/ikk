@@ -85,6 +85,10 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // Remove `{exe}.old`/`{exe}.new` left by a previous self-update (the OS
+    // releases the lock on the old binary at process exit).
+    self_update::sweep_stale_update_files();
+
     let home = match cli.home {
         Some(p) => ikk_core::IkkHome::new(p),
         None => ikk_core::IkkHome::default(),

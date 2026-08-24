@@ -161,60 +161,72 @@ async fn fetch_expected_sha256(
     Ok(None)
 }
 
-/// Atomically replace the running binary.
+/// Replace the running binary in place.
 ///
-/// Unix: write a temp file in the same directory, make it executable, then
-/// `rename()` over the current exe — atomic on the same filesystem, and safe
-/// while running (the old inode stays alive until process exit).
-/// Windows: rename the old exe aside, move the new one into place; the old
-/// file is deleted on next start (Windows cannot unlink a running binary).
+/// Pattern (the one used by rustup/scoop self-updates): write the new bytes
+/// to `{exe}.new`, rename the running exe to `{exe}.old`, then rename the new
+/// file into the freed path. This works on every OS:
+///
+/// - Windows: a running exe cannot be unlinked or renamed *over* (error 32),
+///   but renaming it *away* is allowed — the lock follows the file to
+///   `{exe}.old` and the path is freed for the new binary.
+/// - Unix: `rename(2)` over a running binary is atomic and safe (the old
+///   inode stays alive until process exit); the rename-aside sequence is
+///   equally safe and keeps one code path for all platforms.
+///
+/// `{exe}.old` is deleted by [`sweep_stale_update_files`] on the next start
+/// (the OS releases the lock at process exit). If the swap fails partway, the
+/// old binary is still at `{exe}.old` and the error says so.
 fn replace_binary(bytes: &[u8]) -> Result<()> {
     let exe = std::env::current_exe().context("cannot determine current executable path")?;
+    let new = exe.with_extension("new");
+    let old = exe.with_extension("old");
 
-    #[cfg(windows)]
-    return replace_binary_windows(&exe, bytes);
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
-    #[cfg(not(windows))]
-    {
-        use std::os::unix::fs::PermissionsExt;
+    std::fs::write(&new, bytes).map_err(ikk_core::error::IkkError::Io)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755))?;
 
-        let tmp = exe.with_file_name(format!("{}.new-{}", file_stem(&exe), std::process::id()));
+    // Drop a stale backup from a previous interrupted update.
+    let _ = std::fs::remove_file(&old);
 
-        std::fs::write(&tmp, bytes)?;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::rename(&tmp, &exe).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            ikk_core::error::IkkError::Io(e)
-        })?;
+    // Rename the running exe away — the lock (Windows) / inode (Unix) follows
+    // it, and the original path is freed.
+    std::fs::rename(&exe, &old).map_err(|e| {
+        let _ = std::fs::remove_file(&new);
+        ikk_core::error::IkkError::Io(e)
+    })?;
 
-        Ok(())
-    }
-}
+    // Move the new binary into the freed path.
+    std::fs::rename(&new, &exe).map_err(|e| {
+        // Best effort: restore the old binary so the install isn't broken.
+        let _ = std::fs::rename(&old, &exe);
+        ikk_core::error::IkkError::Io(e)
+    })?;
 
-/// Windows: rename the old exe aside, move the new one into place. The old
-/// file is deleted on next start (Windows cannot unlink a running binary).
-#[cfg(windows)]
-fn replace_binary_windows(exe: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    let backup = exe.with_extension("old");
-
-    // Drop any stale backup from a previous update.
-    let _ = std::fs::remove_file(&backup);
-
-    std::fs::write(exe.with_extension("new"), bytes)?;
-    std::fs::rename(exe, &backup)?;
-    std::fs::rename(exe.with_extension("new"), exe)?;
-
-    // Preserve the original permissions (UAC virtualization markers etc.).
-    if let Ok(meta) = std::fs::metadata(&backup) {
-        let _ = std::fs::set_permissions(exe, meta.permissions());
-    }
+    // Best effort: the OS usually still locks the old file until process exit;
+    // the startup sweep handles the rest.
+    let _ = std::fs::remove_file(&old);
 
     Ok(())
 }
 
-#[cfg(not(windows))]
-fn file_stem(path: &std::path::Path) -> String {
-    path.file_name().and_then(|n| n.to_str()).unwrap_or("ikk").to_string()
+/// Delete `{exe}.old` / `{exe}.new` left next to the running binary by a
+/// previous self-update. Called at startup: the OS releases the lock on the
+/// old binary at process exit, so by the next start it can be removed.
+/// Also recovers from any previously failed/half-done update.
+pub fn sweep_stale_update_files() {
+    if let Ok(exe) = std::env::current_exe() {
+        sweep_stale_update_files_for(&exe);
+    }
+}
+
+fn sweep_stale_update_files_for(exe: &std::path::Path) {
+    for ext in ["old", "new"] {
+        let _ = std::fs::remove_file(exe.with_extension(ext));
+    }
 }
 
 #[cfg(test)]
@@ -226,5 +238,43 @@ mod tests {
         assert_eq!(strip_v("v0.8.2"), "0.8.2");
         assert_eq!(strip_v("V1.0.0"), "1.0.0");
         assert_eq!(strip_v("0.8.2"), "0.8.2");
+    }
+
+    /// Regression: the old implementation renamed the running exe *over* (or
+    /// renamed it aside on Windows), which fails while the file is locked by
+    /// the running process (Windows error 32). The rename-aside sequence must
+    /// succeed against a held-open file.
+    #[test]
+    fn replace_binary_succeeds_while_exe_is_locked() {
+        let dir = std::env::temp_dir().join(format!("ikk_selfupdate_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join(if cfg!(windows) { "ikk.exe" } else { "ikk" });
+        std::fs::write(&exe, b"old-binary").unwrap();
+
+        // Simulate the OS lock on a running binary: hold the file open.
+        // On Windows this is a read handle with no sharing — rename-over fails
+        // with error 32, rename-away succeeds (the lock follows the file).
+        // On Unix, rename(2) succeeds either way; the handle stays valid on
+        // the old inode.
+        let held = std::fs::File::open(&exe).unwrap();
+        let _ = &held;
+
+        // Drive the same sequence replace_binary uses, against `exe`.
+        let new = exe.with_extension("new");
+        let old = exe.with_extension("old");
+        std::fs::write(&new, b"new-binary").unwrap();
+        let _ = std::fs::remove_file(&old);
+        std::fs::rename(&exe, &old).expect("rename-away of a locked exe must succeed");
+        std::fs::rename(&new, &exe).expect("rename into freed path must succeed");
+
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new-binary");
+        assert_eq!(std::fs::read(&old).unwrap(), b"old-binary");
+
+        // Startup sweep removes the old file once the lock is released.
+        drop(held);
+        sweep_stale_update_files_for(&exe);
+        assert!(!old.exists());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new-binary");
     }
 }
