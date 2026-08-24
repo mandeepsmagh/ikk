@@ -1,10 +1,7 @@
 use super::Ctx;
 use anyhow::Result;
 use clap::Args;
-use ikk_core::{
-    home::IkkHome,
-    ops::{collect_executables, is_executable},
-};
+use ikk_core::{home::IkkHome, ops::collect_executables};
 use std::process::Command;
 
 #[derive(Args)]
@@ -94,7 +91,7 @@ fn list_binaries(dir: &std::path::Path) -> Vec<String> {
             let path = entry.path();
             if path.is_dir() {
                 names.extend(list_binaries(&path));
-            } else if is_executable(&path) {
+            } else if ikk_core::binary::is_runnable(&path) {
                 names.push(format!("  {}", path.display()));
             }
         }

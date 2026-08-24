@@ -11,6 +11,7 @@
     clippy::bool_to_int_with_if
 )]
 
+pub mod binary;
 pub mod config;
 pub mod error;
 pub mod home;

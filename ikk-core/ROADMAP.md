@@ -22,6 +22,7 @@ This document outlines the strategic architectural shifts required to transform 
 | macOS static `liblzma` (2026-08-22) | ✅ done — `xz2` `static` feature; macOS assets self-contained (no Homebrew dylib); `v0.8.3` release required to ship |
 | windows-arm64 asset (2026-08-22) | ✅ done — `release.yml` `aarch64-pc-windows-msvc` matrix row, `install.ps1` `ProcessArchitecture` detection, `score_asset` native-beats-emulated test; ships with next tag |
 | Flat `bin/` executable links (2026-08-23) | ✅ done — `~/.ikk/bin` is one symlink per executable (recursive scan, collision-rejecting), `ikk.lock` records `bins`, `ikk run`/`ikk check` resolve via store entry; `self_update_repo` serde-defaulted + backfilled by `ikk init` |
+| Content-based executable classifier (2026-08-24) | ✅ done — `binary::is_runnable` classifies by file content (shebang / Mach-O `MH_EXECUTE` / ELF `ET_EXEC` + `ET_DYN`+`PT_INTERP` / Windows extension), shared by `ops` + `ikk run`; stops `.dylib`/`.so` leaking into `~/.ikk/bin` (llama.cpp `bin/`, neovim `lib/`) |
 
 ---
 

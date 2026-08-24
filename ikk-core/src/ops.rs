@@ -288,25 +288,6 @@ fn path_present(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
-/// Is this file an executable? Mode bits on Unix, known script/binary
-/// extensions on Windows.
-#[cfg(unix)]
-pub fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}
-
-#[cfg(windows)]
-pub fn is_executable(path: &Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd"))
-}
-
 /// Collect every executable file under `dir` (recursive).
 ///
 /// Symlinked directories are treated as leaves (not followed) so a symlink
@@ -325,7 +306,7 @@ pub fn collect_executables(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
         if is_dir && !is_symlink {
             collect_executables(&path, out);
-        } else if is_executable(&path) {
+        } else if crate::binary::is_runnable(&path) {
             out.push(path);
         }
     }
@@ -484,7 +465,7 @@ mod tests {
         let src = home.root.join("src");
         std::fs::create_dir_all(src.join("bin")).unwrap();
         let tool = tool_name();
-        std::fs::write(src.join("bin").join(tool), b"binary").unwrap();
+        std::fs::write(src.join("bin").join(tool), b"#!/bin/sh\necho hi").unwrap();
         make_executable(&src.join("bin").join(tool));
 
         let artifact =
@@ -530,12 +511,15 @@ mod tests {
         std::fs::create_dir_all(src.join("share/scripts")).unwrap();
 
         let tool = tool_name();
-        std::fs::write(src.join("bin").join(tool), b"bin-binary").unwrap();
+        std::fs::write(src.join("bin").join(tool), b"#!/bin/sh\necho hi").unwrap();
         make_executable(&src.join("bin").join(tool));
 
+        // A shared library (non-runnable content) must never be linked.
         std::fs::write(src.join("lib/nvim/parser/c.so"), b"lib").unwrap();
         make_executable(&src.join("lib/nvim/parser/c.so"));
-        std::fs::write(src.join("share/scripts/less.sh"), b"script").unwrap();
+        // A runnable script, but under `share/` — excluded by the location
+        // guard even though its content is runnable.
+        std::fs::write(src.join("share/scripts/less.sh"), b"#!/bin/sh\necho hi").unwrap();
         make_executable(&src.join("share/scripts/less.sh"));
 
         let artifact =
@@ -557,7 +541,7 @@ mod tests {
         let src = home.root.join("src");
         std::fs::create_dir_all(src.join("bin")).unwrap();
         let tool = tool_name();
-        std::fs::write(src.join("bin").join(tool), b"binary").unwrap();
+        std::fs::write(src.join("bin").join(tool), b"#!/bin/sh\necho hi").unwrap();
         make_executable(&src.join("bin").join(tool));
 
         let artifact =
@@ -598,7 +582,7 @@ mod tests {
         let src = home.root.join("src");
         std::fs::create_dir_all(&src).unwrap();
         let tool = tool_name();
-        std::fs::write(src.join(tool), b"binary").unwrap();
+        std::fs::write(src.join(tool), b"#!/bin/sh\necho hi").unwrap();
         make_executable(&src.join(tool));
 
         let artifact =
@@ -654,7 +638,7 @@ mod tests {
         let src = home.root.join("src");
         std::fs::create_dir_all(&src).unwrap();
         let tool = tool_name();
-        std::fs::write(src.join(tool), b"binary").unwrap();
+        std::fs::write(src.join(tool), b"#!/bin/sh\necho hi").unwrap();
         make_executable(&src.join(tool));
 
         let artifact =
