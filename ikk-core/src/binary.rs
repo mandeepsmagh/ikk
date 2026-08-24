@@ -39,10 +39,9 @@ pub fn is_runnable(path: &Path) -> bool {
 
     #[cfg(windows)]
     {
-        return path
-            .extension()
+        path.extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd"));
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd"))
     }
 
     #[cfg(unix)]
@@ -241,6 +240,7 @@ mod tests {
 
     /// A thin 64-bit little-endian Mach-O header with the given filetype
     /// (magic at offset 0, filetype at offset 12 — the real layout).
+    #[cfg(unix)]
     fn mach_o_thin(filetype: u32) -> Vec<u8> {
         let mut v = vec![0u8; 32];
         v[0..4].copy_from_slice(&0xfeedfacfu32.to_le_bytes()); // MH_MAGIC_64 (LE)
@@ -251,6 +251,7 @@ mod tests {
 
     /// A fat (universal) Mach-O with one big-endian 64-bit slice of the given
     /// filetype.
+    #[cfg(unix)]
     fn mach_o_fat(filetype: u32) -> Vec<u8> {
         let mut v = vec![0u8; 28];
         v[0..4].copy_from_slice(&0xcafebabeu32.to_be_bytes()); // FAT_MAGIC (BE)
@@ -265,6 +266,7 @@ mod tests {
 
     /// A minimal ELF64 little-endian header + program headers. `phdrs` holds
     /// p_type values; the table follows the 64-byte header.
+    #[cfg(unix)]
     fn elf64(e_type: u16, phdrs: &[u32]) -> Vec<u8> {
         let mut v = vec![0u8; 64];
         v[..4].copy_from_slice(b"\x7fELF");
@@ -283,6 +285,7 @@ mod tests {
     }
 
     /// A minimal ELF32 little-endian header (classifier fails closed on it).
+    #[cfg(unix)]
     fn elf32(e_type: u16) -> Vec<u8> {
         let mut v = vec![0u8; 52];
         v[..4].copy_from_slice(b"\x7fELF");
@@ -292,6 +295,7 @@ mod tests {
         v
     }
 
+    #[cfg(unix)]
     #[test]
     fn shebang_is_runnable() {
         let dir = tmpdir();
@@ -299,6 +303,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[test]
     fn mach_o_execute_only() {
         let dir = tmpdir();
@@ -308,6 +313,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[test]
     fn mach_o_fat_follows_first_slice() {
         let dir = tmpdir();
@@ -316,6 +322,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[test]
     fn elf_exec_and_pie() {
         let dir = tmpdir();
@@ -325,6 +332,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[test]
     fn elf32_is_not_runnable() {
         // Classifier only understands ELF64 phdrs; 32-bit must fail closed.
@@ -342,15 +350,25 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[test]
     fn follows_symlink_to_target_content() {
         let dir = tmpdir();
         let target = file_in(&dir, "real.dylib", &mach_o_thin(6));
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&target, dir.join("link.dylib")).unwrap();
-            assert!(!is_runnable(&dir.join("link.dylib")));
-        }
+        std::os::unix::fs::symlink(&target, dir.join("link.dylib")).unwrap();
+        assert!(!is_runnable(&dir.join("link.dylib")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_extension_detection() {
+        let dir = tmpdir();
+        assert!(is_runnable(&file_in(&dir, "tool.exe", b"whatever")));
+        assert!(is_runnable(&file_in(&dir, "run.bat", b"whatever")));
+        assert!(is_runnable(&file_in(&dir, "run.CMD", b"whatever")));
+        assert!(!is_runnable(&file_in(&dir, "notes.txt", b"whatever")));
+        assert!(!is_runnable(&file_in(&dir, "README", b"whatever")));
         std::fs::remove_dir_all(&dir).ok();
     }
 }
