@@ -1,4 +1,201 @@
-## Architectural Review (2026-08-24)
+# REVIEW.md — running review log (newest first)
+
+## Architecture Review: Staged Hardening (2026-08-24) — Stage 0 complete, no code changed yet
+
+Full trace of the "staged hardening" brief (was `ARCH-REVIEW.md`, deleted after this
+review). Baseline at review time: `cargo test --workspace` -> **73 passed, 0 failed**
+(Windows host; 2 GitHub e2e tests network-gated/ignored).
+
+### Context for the next session
+
+The brief's model is: harden, don't redesign. Invariants that must survive any change:
+single flat `~/.ikk/bin` PATH namespace; zero-config installs; author binary names
+preserved; full upstream tree kept in CAS; cross-package basename collisions rejected;
+lock file authoritative for owned commands; no new manifests/shims/wrappers.
+
+Key code map (verified against current code):
+
+| Area | Location |
+|---|---|
+| Executable classifier | `ikk-core/src/binary.rs::is_runnable` (single predicate, content-based) |
+| Recursive discovery | `ikk-core/src/ops.rs::collect_executables` (symlink dirs = leaves) |
+| PATH export filter | `ikk-core/src/ops.rs::is_path_exported` |
+| Linking / collisions / upgrades | `ikk-core/src/ops.rs::link_executables` |
+| CAS insert / store hits / hashing | `ikk-core/src/store.rs` (`insert`, `hash_dir`, `PACKAGE_DIR = "bin"`) |
+| Archive extraction | `ikk-core/src/processor.rs` (`extract_zip_to_dir`, `safe_join`) |
+| Lock integrity root | `ikk-core/src/lock.rs::compute_root` |
+| Local path classification | `ikk-core/src/config.rs::is_local_uri` / `package_mode` |
+| Store lock (concurrency) | `Ctx::load` in `ikk-cli/src/commands/mod.rs` — exclusive for all mutating commands |
+
+### Findings (Stage 0 verdicts, with evidence)
+
+#### CONFIRMED
+
+**3 — Package symlink containment (P0, top priority).**
+`collect_executables` collects any symlink whose *target content* is runnable
+(`is_runnable` follows links); nothing checks the target stays inside the store root.
+A package shipping `bin/foo -> /usr/bin/anything` or `../../../../outside` gets exported
+to `~/.ikk/bin`, and `store::copy_dir_contents` preserves the escape verbatim in CAS.
+Trust-boundary violation: a malicious package can make an ikk-managed PATH command
+resolve to arbitrary system files.
+**Fix:** at export time in `link_executables`, canonicalize each symlink executable
+(depth-capped, fail closed on broken/cycle) and require the resolved target inside
+`sp.root`; skip with warning otherwise. Keep all symlinks in CAS (requirement), filter
+only at export. Apply the same helper to `ikk run` (`run.rs` uses `collect_executables`).
+**Tests:** internal relative link -> exported; absolute external -> not exported;
+relative escape -> not exported; broken link -> not exported; cycle -> not exported.
+
+**5+6 — CAS insertion atomicity + full-hash validation on store hits (P0, one change).**
+`Store::insert()` does `create_dir(&entry)` under the *final* name before copying;
+Rust-level cleanup exists but kill/power-loss leaves a partial final entry that the next
+install accepts as a "store hit" (`entry.exists()` -> return). Same path skips reading
+`meta.toml`, so an entry whose stored `content_sha256` doesn't match is also accepted.
+**Fix:** copy to `store/.tmp-{pid}-{counter}/`, write meta, `rename` to final (atomic on
+all 3 platforms, same volume); best-effort sweep of stale `.tmp-*` at store open; on
+"hit", read `meta.toml` and compare full `content_sha256` — mismatch -> remove +
+re-populate (self-heal). Keep the existing `AlreadyExists` race handling for the rename.
+**Tests:** partial entry treated as miss; meta-hash mismatch self-heals.
+
+**7.1 — ZIP path containment (P0, Windows-relevant).**
+`processor.rs::safe_join` rejects `..` components and strips one leading `/`. Gap: on a
+Windows host a `C:\evil` entry is an *absolute* path that `strip_prefix("/")` doesn't
+strip -> escapes the extraction root. The installed `zip` crate (8.6.0) ships
+`ZipFile::enclosed_name()` (`read.rs:849`) which is Windows-aware via `typed_path`
+(prefix/root stripping, depth-counted parent dirs).
+**Fix:** replace `safe_join` with `file.enclosed_name().ok_or(IkkError::ZipTraversal)?`
++ final `starts_with(out_dir)` assert. Simpler than current code and correct cross-platform.
+**Tests:** `../evil`, `../../evil`, `/absolute/path`, `C:\absolute\path`, `..\windows\escape`.
+
+**1.1 — Duplicate basenames within one package (P1).**
+`link_executables` does `bins.insert(exe, rel)` over `read_dir()`-ordered discovery;
+`bin/foo` + `tools/bin/foo` -> whichever the OS enumerates first silently wins.
+Nondeterministic across platforms. **Fix:** reject as ambiguous — error listing both
+paths (brief's preferred option). ~15 lines + test.
+
+**1.2 — PATH export filter matches the filename too (P1, minor).**
+`is_path_exported` checks `rel.components().any(== "bin")` over *all* components
+including the last: a runnable file literally named `bin` in e.g. `scripts/` gets
+exported. **Fix:** restrict to parent components (`rel.parent()`). Preserves root-level
+and any-depth `bin/...`.
+
+**4.1 — Host OS format validation (P1).**
+`binary.rs` is one `#[cfg(unix)]` path: Linux accepts Mach-O, macOS accepts ELF. Not
+exploitable (exec fails) but wrong classification. **Fix:** gate on
+`cfg!(target_os)` — macOS: shebang + Mach-O; Linux/other unix: shebang + ELF. ~5 lines.
+
+**4.2 — No architecture validation (P1).**
+No ELF `e_machine` (offset 18) or Mach-O `cputype` (offset 4) check -> arm64 binary
+"classified runnable" on x86_64 and vice versa. **Fix:** compare against compile-time
+target (aarch64/x86_64), fail closed on unknown.
+
+**4.3 — Fat Mach-O: first slice only (P1).**
+`macho_fat_is_execute` classifies slice 0 only -> `[dylib_slice, exec_slice]` wrongly
+rejected. **Fix:** scan all slices; runnable iff any slice matches host arch +
+MH_EXECUTE (pairs with 4.2). Keep synthetic-header tests.
+
+**7.2 — ZIP Unix modes discarded (P1).**
+`extract_zip_to_dir` never calls `unix_mode()` (`read.rs:1016`); a ZIP shipping
+`0755 bin/foo` extracts as `0644`. PATH export still works (classifier is content-based)
+but metadata is wrong. **Fix:** on unix, apply `mode & 0o777` when present. Synthetic
+zip test (writer supports `unix_mode`).
+
+**8.1 — Permissions not in tree hash (P2, deferred decision).**
+`hash_dir` ignores modes: `-rwxr-xr-x foo` and `-rw-r--r-- foo` hash identically.
+Including `mode & 0o111` seems right for a package manager that exports executables —
+but **changing this invalidates every existing store identity** (versioned/migration-
+sensitive). Needs an explicit decision before touching.
+
+**8.2 — Whole-file reads in hashing (P2).**
+`hash_dir` does `std::fs::read(path)` per file -> real memory spikes for GB packages
+(llama.cpp). **Fix:** chunked streaming; keep the existing format (tree hasher updates
+with each file's sha256 *hex string*) — behavior-preserving.
+
+**11a — Relative local paths unsupported (P2).**
+`is_local_uri` doesn't match `./x` / `../x`; they fall through to `expand_uri` and die
+as MalformedUri (error, not misrouting). **Fix:** treat explicit `./`/`../` prefixes as
+local without breaking `owner/repo` shorthand.
+
+**11b — `source_url` provenance naming (P2).**
+For remote installs `Artifact.source_url = asset.name` (filename only), so
+`meta.toml`'s `source_url` is misleadingly named; the lock keeps `pkg.uri`, so provenance
+isn't fully lost. Naming confusion more than data loss — rename or populate with the
+real download URL.
+
+#### PARTIALLY VALID
+
+**2 — Transactional linking (P1).**
+`link_executables` order: (1) remove stale links, (2) collision check (may error),
+(3) per-bin remove+create. A failure *after* step 1 leaves the old version's commands
+gone and new ones absent — a failed upgrade breaks the previously-working install.
+Cross-package safety is already fine (collisions checked before creating). **Fix:**
+DISCOVER->VALIDATE->PLAN->COMMIT; compute removes/creates/collisions fully, mutate
+`~/.ikk/bin` only after validation. Skip temp-link+atomic-rename (not materially better,
+cross-platform cost). **Test:** force collision on upgrade of existing package; assert
+old links intact.
+
+**4.4 — ELF phdr arithmetic (P2, bundle with 4.x).**
+`has_pt_interp` computes `phoff + i * phentsize` unchecked; overflow -> seek fails ->
+fail closed, so no UB, but it's untrusted input. **Fix:** `checked_mul`/`checked_add`,
+stop when offset exceeds file length.
+
+**9 — Lock integrity root (P2).**
+`compute_root` actually covers name+version+uri+sha256+bin_entry+variant+**all bins**,
+but the doc comment omits `bins` (stale). Fields concatenated without separators —
+practically safe (fixed-width hex fields, BTreeMap order) but length-prefixing is
+strictly better. Also: state explicitly that this detects *accidental* corruption /
+unsynchronized edits, **not** a malicious local actor who edits both contents and root.
+No signing infrastructure.
+
+#### NOT WORTH COMPLEXITY (rejected)
+
+- **4.5 Windows `.com`** — legacy DOS; `.exe/.bat/.cmd` covers real packages. Don't
+  expand into PATHEXT.
+- **7.3 ZIP symlink extraction** — current code writes symlink entries as regular files
+  containing the target string; no demonstrated package compatibility need. Leave, with
+  existing containment.
+- **8.3 Merkle re-encoding / domain separation** — current per-entry encoding is
+  `name || sha256hex(64 fixed)` for files (unambiguous), recursion for dirs (collision
+  would require a SHA-256 preimage). Adequate for ikk's threat model; document, don't
+  rewrite.
+- **10 — Terminology (`PACKAGE_DIR = "bin"`, `bin_entry`)** — real but pure cleanup;
+  `bin_entry` is a *persisted* lock field (needs serde alias/migration). Do last, only
+  if desired.
+
+### Implementation plan (agreed order)
+
+**P0 — safety boundaries**
+1. Stage 3: symlink containment at export time (`ops.rs` + `run.rs`, 5-test matrix).
+2. Stage 7.1: ZIP `enclosed_name()` replaces `safe_join`.
+3. Stage 5+6: atomic store commit + full-hash validation on hit (one change in `store.rs`).
+
+**P1 — deterministic behavior**
+4. Stage 2: transactional `link_executables` (plan-then-commit; failed upgrade preserves old links).
+5. Stage 1.1 + 1.2: duplicate-basename rejection + parent-component `bin` filter.
+6. Stage 4.1/4.2/4.3 (+4.4 checked arithmetic): host OS/arch validation, fat-Mach-O all-slice scan.
+7. Stage 7.2: ZIP `unix_mode` preservation.
+
+**P2 — robustness/cleanup**
+8. Stage 8.2: streaming file hashing (behavior-preserving).
+9. Stage 9: fix stale doc comment + separators; state non-goal.
+10. Stage 11: `./`/`../` local paths; `source_url` naming.
+
+**Deferred (need explicit decision first)**
+- Stage 8.1: mode bits in tree hash — invalidates all store identities.
+- Stage 10: renames (`PACKAGE_DIR`, `bin_entry`) — persisted names, need migration.
+
+Each item: own commit, tests per brief's deliverable format, run fmt/clippy/tests after.
+
+### Environment notes
+
+- Reviewed on Windows host; unix-only behavior (symlink containment, Mach-O/ELF
+  classifier branches, exec bits) is test-covered via synthetic headers but must be
+  re-verified on real Linux/macOS machines before release.
+- `zip` crate 8.6.0 confirmed in Cargo.lock with `enclosed_name()` and `unix_mode()`.
+
+---
+
+## Architectural Review (2026-08-24) — historical
+
 
 **Verdict:** A-tier. Architecture is highly disciplined, following "Senior Engineer" principles (minimal, non-speculative). The code is robust, but there are opportunities to move toward "S-tier" by increasing composability and decoupling core logic from the filesystem layout.
 
