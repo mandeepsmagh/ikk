@@ -26,6 +26,7 @@ This document outlines the strategic architectural shifts required to transform 
 | Classifier v2 rewrite (2026-08-26) | ✅ done — `binary.rs` is now allocation-free `classify(bytes, path)` → `Classification{Format,Role,Architecture}`; cross-host ELF/Mach-O/PE parsing, bounded metadata views + checked arithmetic; old `is_runnable` removed, call sites use `is_command_candidate`. Classification *persistence* deferred (see REVIEW.md) — in-memory pass-through at `store::insert` is the only worthwhile optimization; CAS bytes + `content_sha256` make a disk cache redundant |
 | Symlink containment (2026-08-24) | ✅ done — `ops::is_within_root` rejects executables whose canonical target escapes the store root, at PATH-export (`link_executables`) and `ikk run` (`find_binary`/`single_executable`/`list_binaries`); 5-case symlink matrix test |
 | ZIP path containment (2026-08-24) | ✅ done — `processor.rs` uses `ZipFile::enclosed_name()` (Windows-aware) + `starts_with(out_dir)` assert; `safe_join` removed; 5-case traversal matrix + nested-layout regression tests |
+| Atomic store commit + hash validation (2026-08-26) | ✅ done — `store::insert` populates `store/.tmp-{pid}-{n}` then atomically renames into place; store hits read `meta.toml` and self-heal (remove + repopulate) on missing/mismatched `content_sha256`; stale `.tmp-*` dirs swept under the exclusive store lock |
 
 ---
 

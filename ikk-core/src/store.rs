@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{IkkError, Result};
 use crate::source::Artifact;
@@ -99,7 +100,8 @@ impl Store {
     }
 
     /// Insert an artifact as a content-addressed entry. Idempotent — skips if
-    /// the same content is already stored.
+    /// the same content is already stored — and self-heals a partial or
+    /// hash-mismatched entry by re-populating it.
     pub fn insert(
         &self,
         name: &str,
@@ -111,69 +113,37 @@ impl Store {
         let entry_name = Self::entry_name(name, version, variant, &content_hash);
         let entry = self.root.join(&entry_name);
 
-        // Idempotent — skip if already there
+        // Idempotent hit: only trust an existing entry whose recorded content
+        // hash matches what we are about to insert. Anything else — a partial
+        // entry from a crashed install, or a hash mismatch — is removed and
+        // re-populated below (self-heal).
         if entry.exists() {
-            tracing::debug!("store hit: {}", entry.display());
-            return Ok(StorePath {
-                hash: content_hash,
-                name: name.to_string(),
-                version: version.to_string(),
-                variant: variant.map(String::from),
-                entry_name,
-                root: entry.join(PACKAGE_DIR),
-                path: entry,
-            });
-        }
-
-        // Create the entry directory. Use create_dir (not _all) to avoid
-        // silently succeeding if another process raced us.
-        match std::fs::create_dir(&entry) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                tracing::debug!("store hit (race): {}", entry.display());
-                return Ok(StorePath {
-                    hash: content_hash,
-                    name: name.to_string(),
-                    version: version.to_string(),
-                    variant: variant.map(String::from),
-                    entry_name,
-                    root: entry.join(PACKAGE_DIR),
-                    path: entry,
-                });
+            if is_valid_hit(&entry, &content_hash) {
+                tracing::debug!("store hit: {}", entry.display());
+                return Ok(self.store_path(entry_name, name, version, variant, &content_hash));
             }
-            Err(e) => return Err(e.into()),
+            tracing::warn!("repopulating invalid store entry {}", entry.display());
+            std::fs::remove_dir_all(&entry)?;
         }
 
-        // Copy the package root into the entry under PACKAGE_DIR, then write
-        // meta.toml. On any failure, remove the partial entry so a broken
-        // install never leaves a half-written store dir behind.
-        let root = entry.join(PACKAGE_DIR);
-        let populate = (|| -> Result<()> {
-            copy_dir_contents(&artifact.dir, &root)?;
-
-            // Metadata — temp+rename so a crash never leaves a partial meta.toml.
-            let meta = StoreMeta {
-                name: name.to_string(),
-                version: version.to_string(),
-                variant: variant.map(String::from),
-                source_url: artifact.source_url.clone(),
-                archive_sha256: artifact.archive_hash.clone(),
-                content_sha256: content_hash.clone(),
-                installed_at: crate::lock::unix_now(),
-            };
-            let meta_path = entry.join("meta.toml");
-            let tmp_meta = meta_path.with_extension(format!("toml.{}.tmp", std::process::id()));
-            std::fs::write(
-                &tmp_meta,
-                toml::to_string(&meta).map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?,
-            )?;
-            std::fs::rename(&tmp_meta, &meta_path)?;
-            Ok(())
-        })();
-
-        if let Err(e) = populate {
-            let _ = std::fs::remove_dir_all(&entry);
+        // Populate a temp dir, then atomically rename it into place so a
+        // kill/power-loss can never leave a partial entry under its real name.
+        let tmp = self.temp_entry_dir();
+        if let Err(e) = populate(&tmp, name, version, variant, artifact, &content_hash) {
+            let _ = std::fs::remove_dir_all(&tmp);
             return Err(e);
+        }
+
+        match std::fs::rename(&tmp, &entry) {
+            Ok(()) => {}
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                // Lost a race to a concurrent insert; the winner is authoritative.
+                if entry.exists() && is_valid_hit(&entry, &content_hash) {
+                    return Ok(self.store_path(entry_name, name, version, variant, &content_hash));
+                }
+                return Err(e.into());
+            }
         }
 
         tracing::info!(
@@ -184,15 +154,36 @@ impl Store {
             &content_hash[..12],
         );
 
-        Ok(StorePath {
-            hash: content_hash,
+        Ok(self.store_path(entry_name, name, version, variant, &content_hash))
+    }
+
+    /// Build the `StorePath` for an entry that holds `content_hash`.
+    fn store_path(
+        &self,
+        entry_name: String,
+        name: &str,
+        version: &str,
+        variant: Option<&str>,
+        content_hash: &str,
+    ) -> StorePath {
+        let entry = self.root.join(&entry_name);
+        StorePath {
+            hash: content_hash.to_string(),
             name: name.to_string(),
             version: version.to_string(),
             variant: variant.map(String::from),
             entry_name,
-            root,
+            root: entry.join(PACKAGE_DIR),
             path: entry,
-        })
+        }
+    }
+
+    /// A unique temp directory name for building an entry before its atomic
+    /// rename into the store.
+    fn temp_entry_dir(&self) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        self.root.join(format!(".tmp-{}-{n}", std::process::id()))
     }
 
     /// Acquire an exclusive lock on the store. Held for the duration of any
@@ -215,9 +206,28 @@ impl Store {
             .open(&path)?;
 
         match file.try_lock_exclusive() {
-            Ok(()) => Ok(StoreLock { _file: file }),
+            Ok(()) => {
+                // Holding the exclusive lock, no other process can be mid-insert,
+                // so any `.tmp-*` dir is a stale leftover from a crashed install.
+                self.sweep_stale_tmp();
+                Ok(StoreLock { _file: file })
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(IkkError::StoreBusy),
             Err(e) => Err(IkkError::Io(e)),
+        }
+    }
+
+    /// Best-effort removal of `store/.tmp-*` dirs left by a crashed insert.
+    /// Must be called while holding the exclusive store lock.
+    fn sweep_stale_tmp(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let name = entry.file_name();
+            if name.to_str().is_some_and(|n| n.starts_with(".tmp-")) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
         }
     }
 
@@ -370,6 +380,51 @@ pub(crate) fn recreate_symlink(target: &Path, dest: &Path) -> std::io::Result<()
     }
 }
 
+/// Whether `entry` is a trustworthy store hit for `content_hash`: it has a
+/// parseable `meta.toml` whose `content_sha256` matches. Missing/unparseable
+/// meta and a mismatched hash all read as "not a hit" so the caller removes
+/// and re-populates (self-heal).
+fn is_valid_hit(entry: &Path, content_hash: &str) -> bool {
+    let Ok(raw) = std::fs::read_to_string(entry.join("meta.toml")) else {
+        return false;
+    };
+    let Ok(meta) = toml::from_str::<StoreMeta>(&raw) else {
+        return false;
+    };
+    meta.content_sha256 == content_hash
+}
+
+/// Copy the artifact into `dir` (under `PACKAGE_DIR`) and write `meta.toml`.
+///
+/// `dir` is a fresh temp dir; the caller atomically renames it into place on
+/// success and removes it on failure.
+fn populate(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    variant: Option<&str>,
+    artifact: &Artifact,
+    content_hash: &str,
+) -> Result<()> {
+    let root = dir.join(PACKAGE_DIR);
+    copy_dir_contents(&artifact.dir, &root)?;
+
+    let meta = StoreMeta {
+        name: name.to_string(),
+        version: version.to_string(),
+        variant: variant.map(String::from),
+        source_url: artifact.source_url.clone(),
+        archive_sha256: artifact.archive_hash.clone(),
+        content_sha256: content_hash.to_string(),
+        installed_at: crate::lock::unix_now(),
+    };
+    std::fs::write(
+        dir.join("meta.toml"),
+        toml::to_string(&meta).map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +547,84 @@ mod tests {
 
         store.remove_by_entry(&sp.entry_name).unwrap();
         assert!(!sp.path.exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn insert_self_heals_missing_meta() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_heal_meta_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("rg"), b"binary").unwrap();
+
+        let store = Store::open(tmp.join("store")).unwrap();
+        let sp = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
+
+        // Simulate a partial entry left by a crashed install: meta.toml gone.
+        std::fs::remove_file(sp.path.join("meta.toml")).unwrap();
+
+        // Re-insert must treat it as a miss and repopulate.
+        let sp2 = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
+        assert_eq!(sp2.entry_name, sp.entry_name);
+        assert!(sp2.path.join("meta.toml").exists());
+        assert!(sp2.root.join("rg").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn insert_self_heals_hash_mismatch() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_heal_hash_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("rg"), b"binary").unwrap();
+
+        let store = Store::open(tmp.join("store")).unwrap();
+        let sp = store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
+
+        // Corrupt the recorded content hash in meta.toml.
+        let meta_path = sp.path.join("meta.toml");
+        let raw = std::fs::read_to_string(&meta_path).unwrap();
+        let bogus = "0".repeat(sp.hash.len());
+        std::fs::write(&meta_path, raw.replace(&sp.hash, &bogus)).unwrap();
+
+        // Re-insert must detect the mismatch and repopulate with the real hash.
+        store.insert("ripgrep", "14.1.1", None, &artifact(&src)).unwrap();
+        let healed: StoreMeta =
+            toml::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+        assert_eq!(healed.content_sha256, sp.hash);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sweep_removes_stale_temp_dirs() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_sweep_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let store = Store::open(tmp.join("store")).unwrap();
+
+        // A stale temp dir from a "crashed" insert, plus a real entry and the
+        // lock file, which must all survive the sweep.
+        let stale = store.root().join(".tmp-999999-0");
+        std::fs::create_dir_all(&stale).unwrap();
+        let real = store.root().join("abc123-ripgrep-14.1.1");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(store.root().join(".lock"), b"").unwrap();
+
+        store.sweep_stale_tmp();
+
+        assert!(!stale.exists());
+        assert!(real.exists());
+        assert!(store.root().join(".lock").exists());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
