@@ -2,7 +2,7 @@
 
 ## Status
 
-- **v0.8.9** (latest tag). Content-based PATH-linking classifier is complete and committed (`333c622`, `af40470`).
+- **v0.9.0** (latest tag). Full P0+P1 hardening pass shipped (all items below); released from this commit.
 - **P0 item 1 (symlink containment) DONE** — `ops::is_within_root` filters escaping symlink executables at PATH-export and `ikk run`; 5-case matrix test added.
 - **P0 item 2 (ZIP path containment) DONE** — `processor.rs` now uses `ZipFile::enclosed_name()` (Windows-aware) + a `starts_with(out_dir)` assert; `safe_join` removed. 5-case traversal test matrix + nested-layout regression test.
 - **P0 item 3 (atomic store commit + hash validation) DONE** — `store::insert` now populates a `store/.tmp-{pid}-{counter}` dir and atomically `rename`s it into place; on a store hit it reads `meta.toml` and self-heals (remove + repopulate) on missing/mismatched `content_sha256`. Stale `.tmp-*` dirs are swept under the exclusive store lock. 3 new tests (partial-entry self-heal, hash-mismatch self-heal, temp-dir sweep).
