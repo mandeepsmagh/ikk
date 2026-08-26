@@ -5,13 +5,14 @@
 - **v0.8.9** (latest tag). Content-based PATH-linking classifier is complete and committed (`333c622`, `af40470`).
 - **P0 item 1 (symlink containment) DONE** — `ops::is_within_root` filters escaping symlink executables at PATH-export and `ikk run`; 5-case matrix test added.
 - **P0 item 2 (ZIP path containment) DONE** — `processor.rs` now uses `ZipFile::enclosed_name()` (Windows-aware) + a `starts_with(out_dir)` assert; `safe_join` removed. 5-case traversal test matrix + nested-layout regression test.
-- **P0 item 3 (atomic store commit + hash validation) DONE** — `store::insert` now populates a `store/.tmp-{pid}-{counter}` dir and atomically `rename`s it into place; on a store hit it reads `meta.toml` and self-heals (remove + repopulate) on missing/mismatched `content_sha256`. Stale `.tmp-*` dirs are swept under the exclusive store lock. 3 new tests (partial-entry self-heal, hash-mismatch self-heal, temp-dir sweep). fmt/clippy clean; 113 core + 13 CLI + 1 real-world tests pass on macOS host.
+- **P0 item 3 (atomic store commit + hash validation) DONE** — `store::insert` now populates a `store/.tmp-{pid}-{counter}` dir and atomically `rename`s it into place; on a store hit it reads `meta.toml` and self-heals (remove + repopulate) on missing/mismatched `content_sha256`. Stale `.tmp-*` dirs are swept under the exclusive store lock. 3 new tests (partial-entry self-heal, hash-mismatch self-heal, temp-dir sweep).
+- **P1 item 2 (transactional linking) DONE** — `link_executables` reordered to validate collisions before mutating `bin/`; a failed upgrade (e.g. a new bin name colliding with another package) now leaves the old links intact. Test: collision-on-upgrade asserts stale old link survives. fmt/clippy clean; 114 core + 13 CLI + 1 real-world tests pass on macOS host.
 - **Classifier v2 landed** — `binary.rs` rewritten (was `binaryv1.rs`): allocation-free `classify(bytes, path)` → `Classification{Format,Role,Architecture}`, cross-host ELF/Mach-O/PE parsing, bounded metadata views + checked arithmetic, `CLASSIFIER_VERSION = 1`; the old `is_runnable` wrapper was removed and its two call sites now use `is_command_candidate`. fmt/clippy clean; 110 core + 13 CLI + 1 real-world tests pass on macOS host.
 - **Stage 0 architecture review COMPLETE.** Full findings, evidence, and the agreed implementation plan are in `REVIEW.md` (top section, "Staged Hardening").
 
 ## Next
 
-1. **P1 items** from `REVIEW.md`, in order: (2) transactional `link_executables`, (1.1+1.2) duplicate-basename rejection + parent-component `bin` filter, (4.x) host OS/arch validation + fat-Mach-O + checked arithmetic (note: 4.3 fat-Mach-O and 4.4 checked arithmetic are already done by classifier v2 — see REVIEW.md), (7.2) ZIP `unix_mode` preservation.
+1. **P1 items** from `REVIEW.md`, in order: (1.1+1.2) duplicate-basename rejection + parent-component `bin` filter, (4.x) host OS/arch validation (note: 4.3 fat-Mach-O and 4.4 checked arithmetic are already done by classifier v2 — see REVIEW.md), (7.2) ZIP `unix_mode` preservation.
 2. Full plan + invariants + code map are in REVIEW.md — read that section first; do not re-derive from source.
 
 ## Gotchas / decisions needed

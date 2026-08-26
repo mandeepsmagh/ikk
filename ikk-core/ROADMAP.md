@@ -27,6 +27,7 @@ This document outlines the strategic architectural shifts required to transform 
 | Symlink containment (2026-08-24) | ✅ done — `ops::is_within_root` rejects executables whose canonical target escapes the store root, at PATH-export (`link_executables`) and `ikk run` (`find_binary`/`single_executable`/`list_binaries`); 5-case symlink matrix test |
 | ZIP path containment (2026-08-24) | ✅ done — `processor.rs` uses `ZipFile::enclosed_name()` (Windows-aware) + `starts_with(out_dir)` assert; `safe_join` removed; 5-case traversal matrix + nested-layout regression tests |
 | Atomic store commit + hash validation (2026-08-26) | ✅ done — `store::insert` populates `store/.tmp-{pid}-{n}` then atomically renames into place; store hits read `meta.toml` and self-heal (remove + repopulate) on missing/mismatched `content_sha256`; stale `.tmp-*` dirs swept under the exclusive store lock |
+| Transactional linking (2026-08-26) | ✅ done — `link_executables` validates collisions before mutating `bin/` (plan-then-commit); a failed upgrade leaves the old links intact |
 
 ---
 

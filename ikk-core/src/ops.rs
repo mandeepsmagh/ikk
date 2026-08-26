@@ -220,15 +220,9 @@ pub fn link_executables(
     let previous: Vec<String> =
         lock.get(name).map(|l| l.bins.keys().cloned().collect()).unwrap_or_default();
 
-    // Drop links for executables that no longer exist in this version.
-    for exe in &previous {
-        if !bins.contains_key(exe) {
-            remove_dir_or_link(&bin_dir.join(exe))?;
-        }
-    }
-
-    // Reject collisions before touching anything: a bin name already present
-    // and not owned by this package must never be overwritten.
+    // VALIDATE before mutating: a bin name already present and not owned by
+    // this package must never be overwritten. Checking collisions up front
+    // means a failed upgrade leaves the previously-working links untouched.
     let mut collisions = Vec::new();
     for exe in bins.keys() {
         let link = bin_dir.join(exe);
@@ -254,8 +248,16 @@ pub fn link_executables(
         )));
     }
 
-    let mut link_type = "link".to_string();
+    // COMMIT — mutate `bin/` only after validation passed.
+    // 1. Drop links for executables that no longer exist in this version.
+    for exe in &previous {
+        if !bins.contains_key(exe) {
+            remove_dir_or_link(&bin_dir.join(exe))?;
+        }
+    }
 
+    // 2. Create (or refresh) each new link.
+    let mut link_type = "link".to_string();
     for (exe, rel) in &bins {
         let link = bin_dir.join(exe);
         if path_present(&link) {
@@ -598,6 +600,83 @@ mod tests {
 
         let err = link_executables(&home, "two", &sp2, &lock).unwrap_err();
         assert!(err.to_string().contains("collision"), "unexpected error: {err}");
+
+        let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[test]
+    fn link_executables_failed_upgrade_preserves_old_links() {
+        let (_dir, home, store, mut lock, _platform) = setup("txnlink");
+
+        // v1 of "one" ships foo + bar.
+        let src_v1 = home.root.join("src_v1");
+        std::fs::create_dir_all(src_v1.join("bin")).unwrap();
+        for exe in ["foo", "bar"] {
+            std::fs::write(src_v1.join("bin").join(exe), b"#!/bin/sh\necho hi").unwrap();
+            make_executable(&src_v1.join("bin").join(exe));
+        }
+
+        let artifact_v1 =
+            Artifact { dir: src_v1.clone(), archive_hash: "v1".into(), source_url: "url".into() };
+        let sp_v1 = store.insert("one", "1.0", None, &artifact_v1).unwrap();
+        let linked = link_executables(&home, "one", &sp_v1, &lock).unwrap();
+        lock.insert(
+            "one".into(),
+            crate::lock::LockedPackage {
+                version: "1.0".into(),
+                variant: None,
+                uri: "url".into(),
+                sha256: "v1".into(),
+                bin_entry: sp_v1.entry_name.clone(),
+                bins: linked.bins,
+                link_type: linked.link_type,
+                installed_at: 0,
+            },
+        );
+
+        // A different package "two" owns "baz".
+        let src_two = home.root.join("src_two");
+        std::fs::create_dir_all(src_two.join("bin")).unwrap();
+        std::fs::write(src_two.join("bin/baz"), b"#!/bin/sh\necho hi").unwrap();
+        make_executable(&src_two.join("bin/baz"));
+        let artifact_two =
+            Artifact { dir: src_two.clone(), archive_hash: "two".into(), source_url: "url".into() };
+        let sp_two = store.insert("two", "1.0", None, &artifact_two).unwrap();
+        let linked_two = link_executables(&home, "two", &sp_two, &lock).unwrap();
+        lock.insert(
+            "two".into(),
+            crate::lock::LockedPackage {
+                version: "1.0".into(),
+                variant: None,
+                uri: "url".into(),
+                sha256: "two".into(),
+                bin_entry: sp_two.entry_name.clone(),
+                bins: linked_two.bins,
+                link_type: linked_two.link_type,
+                installed_at: 0,
+            },
+        );
+
+        // v2 of "one" drops "bar" and adds "baz" — which collides with "two".
+        let src_v2 = home.root.join("src_v2");
+        std::fs::create_dir_all(src_v2.join("bin")).unwrap();
+        for exe in ["foo", "baz"] {
+            std::fs::write(src_v2.join("bin").join(exe), b"#!/bin/sh\necho hi").unwrap();
+            make_executable(&src_v2.join("bin").join(exe));
+        }
+        let artifact_v2 =
+            Artifact { dir: src_v2.clone(), archive_hash: "v2".into(), source_url: "url".into() };
+        let sp_v2 = store.insert("one", "2.0", None, &artifact_v2).unwrap();
+
+        // Upgrading "one" must fail on the collision BEFORE removing "bar".
+        let err = link_executables(&home, "one", &sp_v2, &lock).unwrap_err();
+        assert!(err.to_string().contains("collision"), "unexpected error: {err}");
+
+        // The old install is intact: "bar" (stale in v2) is still linked, and
+        // "two"'s "baz" is untouched.
+        assert!(path_present(&home.bin_dir().join("foo")));
+        assert!(path_present(&home.bin_dir().join("bar")));
+        assert!(path_present(&home.bin_dir().join("baz")));
 
         let _ = std::fs::remove_dir_all(&home.root);
     }
