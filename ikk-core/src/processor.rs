@@ -128,7 +128,17 @@ fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
     let mut archive = ZipArchive::new(cursor).map_err(|e| IkkError::Store(e.to_string()))?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| IkkError::Store(e.to_string()))?;
-        let out_path = safe_join(out_dir, file.name())?;
+        // `enclosed_name` is Windows-aware (`\` and `/` are both separators,
+        // a leading drive/root is stripped, and `..` is depth-counted), so an
+        // absolute or parent-relative entry can never escape the root.
+        let Some(rel) = file.enclosed_name() else {
+            return Err(IkkError::ZipTraversal(file.name().to_string()));
+        };
+        let out_path = out_dir.join(&rel);
+        // Defense in depth: even a sanitized path must stay under out_dir.
+        if !out_path.starts_with(out_dir) {
+            return Err(IkkError::ZipTraversal(file.name().to_string()));
+        }
         if file.is_dir() {
             std::fs::create_dir_all(&out_path)?;
         } else {
@@ -188,24 +198,6 @@ fn attach_dmg(dmg_path: &Path) -> Result<String> {
         .and_then(|l| l.split_whitespace().last())
         .map(ToString::to_string)
         .ok_or_else(|| IkkError::Store("could not determine dmg mount point".into()))
-}
-
-// ── zip path safety ──────────────────────────────────────────────────────────
-
-/// Join a base directory with a zip entry path, rejecting `..` traversal.
-fn safe_join(base: &Path, entry_path: &str) -> Result<PathBuf> {
-    // Normalize: strip leading slashes, resolve .. components
-    let path = Path::new(entry_path);
-    let path = if path.is_absolute() { path.strip_prefix("/").unwrap_or(path) } else { path };
-
-    // Reject any component that is ".."
-    for component in path.components() {
-        if component == std::path::Component::ParentDir {
-            return Err(IkkError::ZipTraversal(entry_path.to_string()));
-        }
-    }
-
-    Ok(base.join(path))
 }
 
 // ── permission helpers ───────────────────────────────────────────────────────
@@ -309,12 +301,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn zip_with_entries(files: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        use zip::ZipWriter;
+        use zip::write::SimpleFileOptions;
+
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        for (name, data) in files {
+            writer.start_file(*name, SimpleFileOptions::default()).unwrap();
+            writer.write_all(data).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
     #[test]
-    fn zip_safe_join_blocks_traversal() {
-        let base = Path::new("/tmp/out");
-        assert!(safe_join(base, "../../etc/passwd").is_err());
-        assert!(safe_join(base, "foo/../../../bar").is_err());
-        assert!(safe_join(base, "normal/file.txt").is_ok());
-        assert!(safe_join(base, "./ok.txt").is_ok());
+    fn zip_extraction_rejects_parent_traversal() {
+        for evil in ["../evil", "../../evil", r"..\windows\escape"] {
+            let bytes = zip_with_entries(&[(evil, b"x")]);
+            let dir = temp_dir("ziptraverse");
+            let out = dir.join("out");
+            std::fs::create_dir_all(&out).unwrap();
+
+            let err = extract_zip_to_dir(&bytes, &out).unwrap_err();
+            assert!(
+                matches!(err, IkkError::ZipTraversal(_)),
+                "unexpected error for '{evil}': {err}"
+            );
+            assert!(!out.join("evil").exists());
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn zip_extraction_sanitizes_absolute_paths_into_root() {
+        for abs in ["/absolute/path", r"C:\absolute\path"] {
+            let bytes = zip_with_entries(&[(abs, b"data")]);
+            let dir = temp_dir("zipabsolute");
+            let out = dir.join("out");
+            std::fs::create_dir_all(&out).unwrap();
+
+            extract_zip_to_dir(&bytes, &out).unwrap();
+
+            // The absolute prefix is stripped; the file lands *inside* out,
+            // never at the filesystem's absolute location.
+            assert!(
+                out.join("absolute").join("path").exists(),
+                "'{abs}' was not sanitized into the extraction root"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn zip_extraction_keeps_nested_layout() {
+        let bytes = zip_with_entries(&[("bin/tool", b"binary"), ("lib/tool.so", b"lib")]);
+        let dir = temp_dir("zipnested");
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        extract_zip_to_dir(&bytes, &out).unwrap();
+        assert!(out.join("bin/tool").exists());
+        assert!(out.join("lib/tool.so").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
