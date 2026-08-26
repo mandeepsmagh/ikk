@@ -1,5 +1,24 @@
 # REVIEW.md — running review log (newest first)
 
+## Decision: classification persistence deferred (2026-08-26)
+
+Classifier v2 landed (`binary.rs`, was `binaryv1.rs`): allocation-free
+`classify(bytes, path) -> Classification{Format, Role, Architecture}`, cross-host
+ELF/Mach-O/PE parsing (PE content-based on every host), bounded metadata views +
+checked arithmetic, `CLASSIFIER_VERSION = 1`; `is_runnable` kept as a compat wrapper.
+
+**Decided: do NOT persist classification in CAS metadata (`CachedClassification`).**
+Rationale: the CAS always holds the bytes, so recomputation is one bounded local
+read away; `meta.content_sha256` is already the integrity anchor, so a disk cache
+adds no safety — only a schema + serde + version/self-heal + migration cost for a
+micro-optimization. If the install-time double read (hash in `store::insert` + re-
+classify in `link_executables`) ever shows up, use an **in-memory** pass-through
+from `store::insert` to `link_executables` instead. `CLASSIFIER_VERSION` remains as
+the future-proofing hook. Revisit only if a read-side consumer appears
+(`ikk info --verbose`, wrong-arch warnings, architecture-aware gating).
+
+---
+
 ## Architecture Review: Staged Hardening (2026-08-24) — Stage 0 complete, no code changed yet
 
 Full trace of the "staged hardening" brief (was `ARCH-REVIEW.md`, deleted after this
