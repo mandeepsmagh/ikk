@@ -29,6 +29,7 @@ This document outlines the strategic architectural shifts required to transform 
 | Atomic store commit + hash validation (2026-08-26) | ✅ done — `store::insert` populates `store/.tmp-{pid}-{n}` then atomically renames into place; store hits read `meta.toml` and self-heal (remove + repopulate) on missing/mismatched `content_sha256`; stale `.tmp-*` dirs swept under the exclusive store lock |
 | Transactional linking (2026-08-26) | ✅ done — `link_executables` validates collisions before mutating `bin/` (plan-then-commit); a failed upgrade leaves the old links intact |
 | Duplicate-basename rejection + `bin` parent filter (2026-08-26) | ✅ done — two files sharing one basename are rejected as ambiguous; `is_path_exported` checks only *parent* `bin` components (a file named `bin` outside `bin/` is not exported) |
+| Host-native `.ikk/bin` filter (2026-08-26) | ✅ done — `link_executables` takes an explicit `Platform` and links only binaries native to it (`is_host_native`: OS-format match + strict arch; universal + scripts always); CAS keeps everything, `ikk run` still reaches cross binaries; 4.3/4.4 were already done by classifier v2 |
 
 ---
 

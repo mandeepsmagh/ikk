@@ -1,5 +1,22 @@
 # REVIEW.md — running review log (newest first)
 
+## Decision: `.ikk/bin` is platform-native-only (2026-08-26)
+
+`link_executables` now takes an explicit `Platform` and links only binaries
+native to it (`is_host_native`: OS-format match + strict arch match; `Universal`
+and scripts always native). The CAS keeps every binary; `ikk run` resolves
+against the store root (not PATH), so cross binaries stay usable.
+
+Deferred: a `--target` flag to explicitly install/expose another platform. The
+explicit `Platform` parameter and the pure `is_host_native(format, arch, platform)`
+predicate are the hooks — `--target` would thread one `Platform` through asset
+selection (`score_asset`) and this filter. Known strictness gaps (deliberate):
+x86_64-on-Apple-Silicon (Rosetta) and 32-bit-on-x86_64 (multilib) are not
+auto-linked; `.bat`/`.cmd` on unix are still linked (classifier folds them into
+`Script`).
+
+---
+
 ## Decision: classification persistence deferred (2026-08-26)
 
 Classifier v2 landed (`binary.rs`, was `binaryv1.rs`): allocation-free

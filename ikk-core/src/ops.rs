@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::binary::{Architecture, Format};
 use crate::config::{Config, PackageConfig, SecurityConfig};
 use crate::error::{IkkError, Result};
 use crate::home::IkkHome;
 use crate::lock::LockFile;
-use crate::platform::Platform;
+use crate::platform::{Arch, Os, Platform};
 use crate::remote::Remote;
 use crate::source::{LocalSource, RemoteSource, Source, UrlSource};
 use crate::store::{Store, StorePath};
@@ -114,7 +115,7 @@ async fn install_from_source<'a>(
     // 4. Link — every executable in the package is symlinked into bin/, so
     // binaries run directly from PATH no matter where the author nested them
     // (e.g. neovim ships `bin/nvim`, llama.cpp ships `bin/llama-cli`).
-    let linked = link_executables(req.home, req.name, &sp, lock)?;
+    let linked = link_executables(req.home, req.name, &sp, lock, req.platform)?;
 
     // 5. Lock
     lock.insert(
@@ -171,6 +172,9 @@ pub struct LinkedBins {
 /// Link every executable in a package's store root directly into
 /// `bin/<exe>/` so the OS finds it on PATH natively.
 ///
+/// Only binaries native to `platform` are linked; the CAS keeps everything
+/// else, which stays reachable via `ikk run`.
+///
 /// This replaces the old per-package `bin/<name>/` directory link: binaries
 /// keep the names their authors chose, and packages that ship many binaries
 /// (llama.cpp, busybox, …) expose all of them. Name collisions across
@@ -183,6 +187,7 @@ pub fn link_executables(
     name: &str,
     sp: &StorePath,
     lock: &LockFile,
+    platform: &Platform,
 ) -> Result<LinkedBins> {
     validate_name(name)?;
 
@@ -212,6 +217,13 @@ pub fn link_executables(
         // never resolve to arbitrary system files.
         if !is_within_root(path, &sp.root) {
             tracing::warn!("skipping {}: resolves outside the store", rel.display());
+            continue;
+        }
+        // `.ikk/bin` holds only platform-native commands; the CAS keeps every
+        // binary regardless (cross binaries stay reachable via `ikk run`).
+        let classified = crate::binary::classify_file(path);
+        if !is_host_native(classified.format, classified.architecture, platform) {
+            tracing::warn!("skipping {}: not native to this platform", rel.display());
             continue;
         }
         // Two files sharing one basename is ambiguous (e.g. `bin/foo` and
@@ -368,6 +380,38 @@ pub fn is_within_root(path: &Path, root: &Path) -> bool {
     }
 }
 
+/// Whether a classified command candidate is native to `platform` and should
+/// be exposed on PATH.
+///
+/// The CAS keeps every binary regardless; this only gates `~/.ikk/bin` — cross
+/// binaries stay reachable via `ikk run`, which resolves against the store
+/// root, not PATH. Arch is matched strictly (with `Universal` and scripts
+/// always native), so e.g. an x86_64 binary on Apple Silicon is not auto-
+/// linked to PATH even though Rosetta could run it.
+fn is_host_native(format: Format, architecture: Architecture, platform: &Platform) -> bool {
+    let format_ok = match format {
+        Format::MachO => platform.os == Os::MacOs,
+        Format::Elf => platform.os == Os::Linux,
+        Format::Pe => platform.os == Os::Windows,
+        // Scripts run wherever a matching interpreter exists. The classifier
+        // also folds `.bat`/`.cmd` into `Script`, so a Windows batch file in a
+        // unix package is a known minor gap (still linked).
+        Format::Script => true,
+        Format::Unknown => false,
+    };
+    if !format_ok {
+        return false;
+    }
+    match architecture {
+        Architecture::NotApplicable | Architecture::Universal => true,
+        Architecture::Aarch64 => platform.arch == Arch::Aarch64,
+        Architecture::X86_64 => platform.arch == Arch::X86_64,
+        // Other/unknown architectures fail closed here but remain runnable
+        // via `ikk run`.
+        _ => false,
+    }
+}
+
 fn expand_path(uri: &str) -> std::path::PathBuf {
     if let Some(rest) = uri.strip_prefix("~/") {
         dirs::home_dir().map(|h| h.join(rest)).unwrap_or_else(|| std::path::PathBuf::from(uri))
@@ -499,7 +543,7 @@ mod tests {
 
     #[test]
     fn link_executables_creates_symlinks() {
-        let (_dir, home, store, mut lock, _platform) = setup("linkbin");
+        let (_dir, home, store, mut lock, platform) = setup("linkbin");
 
         let src = home.root.join("src");
         std::fs::create_dir_all(src.join("bin")).unwrap();
@@ -511,7 +555,7 @@ mod tests {
             Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
 
-        let linked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+        let linked = link_executables(&home, "pkg", &sp, &lock, &platform).unwrap();
         assert_eq!(linked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
         assert!(matches!(linked.link_type.as_str(), "link" | "copy"));
 
@@ -530,7 +574,7 @@ mod tests {
             },
         );
 
-        let relinked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+        let relinked = link_executables(&home, "pkg", &sp, &lock, &platform).unwrap();
         assert_eq!(relinked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
 
         let link = home.bin_dir().join(tool);
@@ -541,7 +585,7 @@ mod tests {
 
     #[test]
     fn link_executables_skips_lib_and_share() {
-        let (_dir, home, store, lock, _platform) = setup("skipnolink");
+        let (_dir, home, store, lock, platform) = setup("skipnolink");
 
         // neovim-style layout: bin/nvim (link), lib/*.so + share/*.sh (skip).
         let src = home.root.join("src");
@@ -565,7 +609,7 @@ mod tests {
             Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("neovim", "1.0", None, &artifact).unwrap();
 
-        let linked = link_executables(&home, "neovim", &sp, &lock).unwrap();
+        let linked = link_executables(&home, "neovim", &sp, &lock, &platform).unwrap();
         assert_eq!(linked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
         assert!(!home.bin_dir().join("c.so").exists());
         assert!(!home.bin_dir().join("less.sh").exists());
@@ -575,7 +619,7 @@ mod tests {
 
     #[test]
     fn link_executables_rejects_collisions() {
-        let (_dir, home, store, mut lock, _platform) = setup("collision");
+        let (_dir, home, store, mut lock, platform) = setup("collision");
 
         let src = home.root.join("src");
         std::fs::create_dir_all(src.join("bin")).unwrap();
@@ -588,7 +632,7 @@ mod tests {
         let sp = store.insert("one", "1.0", None, &artifact).unwrap();
 
         // First package owns the executable name.
-        let linked = link_executables(&home, "one", &sp, &lock).unwrap();
+        let linked = link_executables(&home, "one", &sp, &lock, &platform).unwrap();
         lock.insert(
             "one".into(),
             crate::lock::LockedPackage {
@@ -608,7 +652,7 @@ mod tests {
             Artifact { dir: src.clone(), archive_hash: "def".into(), source_url: "url".into() };
         let sp2 = store.insert("two", "1.0", None, &artifact2).unwrap();
 
-        let err = link_executables(&home, "two", &sp2, &lock).unwrap_err();
+        let err = link_executables(&home, "two", &sp2, &lock, &platform).unwrap_err();
         assert!(err.to_string().contains("collision"), "unexpected error: {err}");
 
         let _ = std::fs::remove_dir_all(&home.root);
@@ -616,7 +660,7 @@ mod tests {
 
     #[test]
     fn link_executables_failed_upgrade_preserves_old_links() {
-        let (_dir, home, store, mut lock, _platform) = setup("txnlink");
+        let (_dir, home, store, mut lock, platform) = setup("txnlink");
 
         // v1 of "one" ships foo + bar.
         let src_v1 = home.root.join("src_v1");
@@ -629,7 +673,7 @@ mod tests {
         let artifact_v1 =
             Artifact { dir: src_v1.clone(), archive_hash: "v1".into(), source_url: "url".into() };
         let sp_v1 = store.insert("one", "1.0", None, &artifact_v1).unwrap();
-        let linked = link_executables(&home, "one", &sp_v1, &lock).unwrap();
+        let linked = link_executables(&home, "one", &sp_v1, &lock, &platform).unwrap();
         lock.insert(
             "one".into(),
             crate::lock::LockedPackage {
@@ -652,7 +696,7 @@ mod tests {
         let artifact_two =
             Artifact { dir: src_two.clone(), archive_hash: "two".into(), source_url: "url".into() };
         let sp_two = store.insert("two", "1.0", None, &artifact_two).unwrap();
-        let linked_two = link_executables(&home, "two", &sp_two, &lock).unwrap();
+        let linked_two = link_executables(&home, "two", &sp_two, &lock, &platform).unwrap();
         lock.insert(
             "two".into(),
             crate::lock::LockedPackage {
@@ -679,7 +723,7 @@ mod tests {
         let sp_v2 = store.insert("one", "2.0", None, &artifact_v2).unwrap();
 
         // Upgrading "one" must fail on the collision BEFORE removing "bar".
-        let err = link_executables(&home, "one", &sp_v2, &lock).unwrap_err();
+        let err = link_executables(&home, "one", &sp_v2, &lock, &platform).unwrap_err();
         assert!(err.to_string().contains("collision"), "unexpected error: {err}");
 
         // The old install is intact: "bar" (stale in v2) is still linked, and
@@ -693,7 +737,7 @@ mod tests {
 
     #[test]
     fn link_executables_rejects_duplicate_basenames() {
-        let (_dir, home, store, lock, _platform) = setup("dupbasename");
+        let (_dir, home, store, lock, platform) = setup("dupbasename");
 
         let src = home.root.join("src");
         std::fs::create_dir_all(src.join("bin")).unwrap();
@@ -708,7 +752,7 @@ mod tests {
             Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
 
-        let err = link_executables(&home, "pkg", &sp, &lock).unwrap_err();
+        let err = link_executables(&home, "pkg", &sp, &lock, &platform).unwrap_err();
         assert!(err.to_string().contains("ambiguous"), "unexpected error: {err}");
 
         let _ = std::fs::remove_dir_all(&home.root);
@@ -716,7 +760,7 @@ mod tests {
 
     #[test]
     fn link_executables_skips_file_named_bin_outside_bin_dir() {
-        let (_dir, home, store, lock, _platform) = setup("binname");
+        let (_dir, home, store, lock, platform) = setup("binname");
 
         let src = home.root.join("src");
         std::fs::create_dir_all(src.join("scripts")).unwrap();
@@ -736,7 +780,7 @@ mod tests {
             Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
 
-        let linked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+        let linked = link_executables(&home, "pkg", &sp, &lock, &platform).unwrap();
         assert_eq!(linked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
         assert!(!home.bin_dir().join("bin").exists());
 
@@ -744,8 +788,40 @@ mod tests {
     }
 
     #[test]
+    fn is_host_native_os_and_arch_gating() {
+        use crate::binary::{Architecture, Format};
+        use crate::platform::{Arch, Os, Platform};
+
+        let mac_arm = Platform { os: Os::MacOs, arch: Arch::Aarch64 };
+        let mac_x64 = Platform { os: Os::MacOs, arch: Arch::X86_64 };
+        let linux_x64 = Platform { os: Os::Linux, arch: Arch::X86_64 };
+        let win_x64 = Platform { os: Os::Windows, arch: Arch::X86_64 };
+
+        // OS gating: a native format is accepted only on its own OS.
+        assert!(is_host_native(Format::MachO, Architecture::Aarch64, &mac_arm));
+        assert!(!is_host_native(Format::MachO, Architecture::Aarch64, &linux_x64));
+        assert!(is_host_native(Format::Elf, Architecture::X86_64, &linux_x64));
+        assert!(!is_host_native(Format::Elf, Architecture::X86_64, &mac_x64));
+        assert!(is_host_native(Format::Pe, Architecture::X86_64, &win_x64));
+        assert!(!is_host_native(Format::Pe, Architecture::X86_64, &linux_x64));
+
+        // Arch gating: same OS, wrong arch is not native.
+        assert!(!is_host_native(Format::MachO, Architecture::Aarch64, &mac_x64));
+        assert!(!is_host_native(Format::Elf, Architecture::Aarch64, &linux_x64));
+
+        // Universal binaries and scripts are native on any host.
+        assert!(is_host_native(Format::MachO, Architecture::Universal, &mac_x64));
+        assert!(is_host_native(Format::Script, Architecture::NotApplicable, &win_x64));
+        assert!(is_host_native(Format::Script, Architecture::NotApplicable, &linux_x64));
+
+        // Unknown format/arch fail closed.
+        assert!(!is_host_native(Format::Unknown, Architecture::NotApplicable, &linux_x64));
+        assert!(!is_host_native(Format::Elf, Architecture::Unknown(999), &linux_x64));
+    }
+
+    #[test]
     fn remove_unlinks_and_cleans() {
-        let (_dir, home, store, mut lock, _platform) = setup("removetest");
+        let (_dir, home, store, mut lock, platform) = setup("removetest");
 
         let src = home.root.join("src");
         std::fs::create_dir_all(&src).unwrap();
@@ -756,7 +832,7 @@ mod tests {
         let artifact =
             Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("mytool", "1.0", None, &artifact).unwrap();
-        let linked = link_executables(&home, "mytool", &sp, &lock).unwrap();
+        let linked = link_executables(&home, "mytool", &sp, &lock, &platform).unwrap();
 
         lock.insert(
             "mytool".into(),
@@ -801,7 +877,7 @@ mod tests {
 
     #[test]
     fn link_executables_and_remove_reject_traversal_names() {
-        let (_dir, home, store, mut lock, _platform) = setup("traversal");
+        let (_dir, home, store, mut lock, platform) = setup("traversal");
 
         let src = home.root.join("src");
         std::fs::create_dir_all(&src).unwrap();
@@ -815,7 +891,7 @@ mod tests {
 
         for bad in [".", "..", "a/../b", "", "a\\b"] {
             assert!(
-                link_executables(&home, bad, &sp, &lock).is_err(),
+                link_executables(&home, bad, &sp, &lock, &platform).is_err(),
                 "link_executables accepted '{bad}'"
             );
             assert!(remove(bad, &home, &store, &mut lock).is_err(), "remove accepted '{bad}'");
@@ -877,7 +953,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn link_executables_filters_escaping_symlinks() {
-        let (_dir, home, store, lock, _platform) = setup("symescape");
+        let (_dir, home, store, lock, platform) = setup("symescape");
 
         let src = home.root.join("src");
         std::fs::create_dir_all(src.join("bin")).unwrap();
@@ -913,7 +989,7 @@ mod tests {
             Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
         let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
 
-        let linked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+        let linked = link_executables(&home, "pkg", &sp, &lock, &platform).unwrap();
 
         let names: Vec<String> = linked.bins.keys().cloned().collect();
         assert!(names.iter().any(|n| n == tool), "internal binary missing: {names:?}");
