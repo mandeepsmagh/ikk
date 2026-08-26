@@ -206,6 +206,14 @@ pub fn link_executables(
         if !is_path_exported(rel) {
             continue;
         }
+        // Symlink containment: the CAS preserves symlinks verbatim, but a
+        // package may ship `bin/foo -> /outside`. Skip anything whose
+        // canonical target escapes the store root so a PATH command can
+        // never resolve to arbitrary system files.
+        if !is_within_root(path, &sp.root) {
+            tracing::warn!("skipping {}: resolves outside the store", rel.display());
+            continue;
+        }
         bins.insert(exe.to_string(), rel.to_string_lossy().to_string());
     }
 
@@ -327,6 +335,25 @@ fn is_path_exported(rel: &Path) -> bool {
         return true;
     }
     rel.components().any(|c| c.as_os_str() == "bin")
+}
+
+/// Whether the canonical target of `path` resolves inside `root`.
+///
+/// Symlinked executables are preserved verbatim in the CAS, but a package may
+/// ship `bin/foo -> /usr/bin/whatever` or `bin/foo -> ../../outside`.
+/// Exporting or running such a link would make the command resolve outside the
+/// store. This predicate fails closed: `canonicalize` errors on broken links
+/// and cycles (the OS enforces a symlink-resolution depth limit, `ELOOP`), and
+/// a target that merely does not exist is rejected too. Regular files trivially
+/// resolve to themselves inside `root`.
+pub fn is_within_root(path: &Path, root: &Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    match std::fs::canonicalize(path) {
+        Ok(target) => target.starts_with(&root),
+        Err(_) => false,
+    }
 }
 
 fn expand_path(uri: &str) -> std::path::PathBuf {
@@ -704,5 +731,58 @@ mod tests {
         assert!(matches!(results[0], crate::store::VerifyResult::Ok(_)));
 
         let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn link_executables_filters_escaping_symlinks() {
+        let (_dir, home, store, lock, _platform) = setup("symescape");
+
+        let src = home.root.join("src");
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+
+        // A real internal binary, plus a relative symlink to it (exported).
+        let tool = tool_name();
+        std::fs::write(src.join("bin").join(tool), b"#!/bin/sh\necho hi").unwrap();
+        make_executable(&src.join("bin").join(tool));
+        std::os::unix::fs::symlink(tool, src.join("bin/internal")).unwrap();
+
+        // Relative escape → a runnable file outside the store root (but inside
+        // the ikk home). `../../../` from the store copy's `bin/` dir resolves
+        // to `home.root/outside-tool`.
+        let outside = home.root.join("outside-tool");
+        std::fs::write(&outside, b"#!/bin/sh\necho evil").unwrap();
+        make_executable(&outside);
+        std::os::unix::fs::symlink("../../../outside-tool", src.join("bin/escape")).unwrap();
+
+        // Absolute external → a runnable file outside the ikk home entirely.
+        let abs_target =
+            std::env::temp_dir().join(format!("ikk_abs_target_{}", std::process::id()));
+        std::fs::write(&abs_target, b"#!/bin/sh\necho abs").unwrap();
+        make_executable(&abs_target);
+        std::os::unix::fs::symlink(&abs_target, src.join("bin/absolute")).unwrap();
+
+        // Broken link → target does not exist.
+        std::os::unix::fs::symlink("missing-target", src.join("bin/broken")).unwrap();
+
+        // Self-referential cycle.
+        std::os::unix::fs::symlink("cycle", src.join("bin/cycle")).unwrap();
+
+        let artifact =
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+        let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
+
+        let linked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+
+        let names: Vec<String> = linked.bins.keys().cloned().collect();
+        assert!(names.iter().any(|n| n == tool), "internal binary missing: {names:?}");
+        assert!(names.iter().any(|n| n == "internal"), "internal symlink missing: {names:?}");
+        assert!(!names.iter().any(|n| n == "escape"), "relative escape exported: {names:?}");
+        assert!(!names.iter().any(|n| n == "absolute"), "absolute escape exported: {names:?}");
+        assert!(!names.iter().any(|n| n == "broken"), "broken link exported: {names:?}");
+        assert!(!names.iter().any(|n| n == "cycle"), "cycle exported: {names:?}");
+
+        let _ = std::fs::remove_dir_all(&home.root);
+        let _ = std::fs::remove_file(&abs_target);
     }
 }

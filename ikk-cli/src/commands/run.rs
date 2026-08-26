@@ -1,7 +1,10 @@
 use super::Ctx;
 use anyhow::Result;
 use clap::Args;
-use ikk_core::{home::IkkHome, ops::collect_executables};
+use ikk_core::{
+    home::IkkHome,
+    ops::{collect_executables, is_within_root},
+};
 use std::process::Command;
 
 #[derive(Args)]
@@ -35,7 +38,7 @@ pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
     let binary_name = if args.binary.is_empty() { args.name.clone() } else { args.binary.clone() };
 
     // Default: the package name; fallback: the sole executable in the package.
-    let binary_path = find_binary(&pkg_dir, &binary_name)
+    let binary_path = find_binary(&pkg_dir, &pkg_dir, &binary_name)
         .or_else(|| if args.binary.is_empty() { single_executable(&pkg_dir) } else { None })
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -56,7 +59,11 @@ pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
     Ok(())
 }
 
-fn find_binary(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+fn find_binary(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    name: &str,
+) -> Option<std::path::PathBuf> {
     if !dir.exists() {
         return None;
     }
@@ -64,12 +71,14 @@ fn find_binary(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> 
     for entry in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.is_dir() {
-            if let Some(found) = find_binary(&path, name) {
+            if let Some(found) = find_binary(root, &path, name) {
                 return Some(found);
             }
         } else {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if filename == name || filename == format!("{name}.exe") {
+            if (filename == name || filename == format!("{name}.exe"))
+                && is_within_root(&path, root)
+            {
                 return Some(path);
             }
         }
@@ -81,20 +90,25 @@ fn find_binary(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> 
 fn single_executable(root: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut found: Vec<std::path::PathBuf> = Vec::new();
     collect_executables(root, &mut found);
+    found.retain(|p| is_within_root(p, root));
     if found.len() == 1 { found.pop() } else { None }
 }
 
 fn list_binaries(dir: &std::path::Path) -> Vec<String> {
     let mut names = vec![];
+    list_binaries_inner(dir, dir, &mut names);
+    names
+}
+
+fn list_binaries_inner(root: &std::path::Path, dir: &std::path::Path, names: &mut Vec<String>) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             if path.is_dir() {
-                names.extend(list_binaries(&path));
-            } else if ikk_core::binary::is_runnable(&path) {
+                list_binaries_inner(root, &path, names);
+            } else if ikk_core::binary::is_runnable(&path) && is_within_root(&path, root) {
                 names.push(format!("  {}", path.display()));
             }
         }
     }
-    names
 }
