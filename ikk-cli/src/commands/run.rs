@@ -106,7 +106,7 @@ fn list_binaries_inner(root: &std::path::Path, dir: &std::path::Path, names: &mu
             let path = entry.path();
             if path.is_dir() {
                 list_binaries_inner(root, &path, names);
-            } else if ikk_core::binary::is_runnable(&path) && is_within_root(&path, root) {
+            } else if ikk_core::binary::is_command_candidate(&path) && is_within_root(&path, root) {
                 names.push(format!("  {}", path.display()));
             }
         }

@@ -5,7 +5,7 @@
 - **v0.8.9** (latest tag). Content-based PATH-linking classifier is complete and committed (`333c622`, `af40470`).
 - **P0 item 1 (symlink containment) DONE** — `ops::is_within_root` filters escaping symlink executables at PATH-export and `ikk run`; 5-case matrix test added.
 - **P0 item 2 (ZIP path containment) DONE** — `processor.rs` now uses `ZipFile::enclosed_name()` (Windows-aware) + a `starts_with(out_dir)` assert; `safe_join` removed. 5-case traversal test matrix + nested-layout regression test.
-- **Classifier v2 landed** — `binary.rs` rewritten (was `binaryv1.rs`): allocation-free `classify(bytes, path)` → `Classification{Format,Role,Architecture}`, cross-host ELF/Mach-O/PE parsing, bounded metadata views + checked arithmetic, `CLASSIFIER_VERSION = 1`; `is_runnable` kept as a compat wrapper. fmt/clippy clean; 110 core + 13 CLI + 1 real-world tests pass on macOS host.
+- **Classifier v2 landed** — `binary.rs` rewritten (was `binaryv1.rs`): allocation-free `classify(bytes, path)` → `Classification{Format,Role,Architecture}`, cross-host ELF/Mach-O/PE parsing, bounded metadata views + checked arithmetic, `CLASSIFIER_VERSION = 1`; the old `is_runnable` wrapper was removed and its two call sites now use `is_command_candidate`. fmt/clippy clean; 110 core + 13 CLI + 1 real-world tests pass on macOS host.
 - **Stage 0 architecture review COMPLETE.** Full findings, evidence, and the agreed implementation plan are in `REVIEW.md` (top section, "Staged Hardening").
 
 ## Next

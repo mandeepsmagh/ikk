@@ -314,7 +314,7 @@ pub fn collect_executables(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
         if is_dir && !is_symlink {
             collect_executables(&path, out);
-        } else if crate::binary::is_runnable(&path) {
+        } else if crate::binary::is_command_candidate(&path) {
             out.push(path);
         }
     }

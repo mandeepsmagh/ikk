@@ -5,7 +5,8 @@
 Classifier v2 landed (`binary.rs`, was `binaryv1.rs`): allocation-free
 `classify(bytes, path) -> Classification{Format, Role, Architecture}`, cross-host
 ELF/Mach-O/PE parsing (PE content-based on every host), bounded metadata views +
-checked arithmetic, `CLASSIFIER_VERSION = 1`; `is_runnable` kept as a compat wrapper.
+checked arithmetic, `CLASSIFIER_VERSION = 1`; the old `is_runnable` compat wrapper was
+removed and its call sites now use `is_command_candidate`.
 
 **Decided: do NOT persist classification in CAS metadata (`CachedClassification`).**
 Rationale: the CAS always holds the bytes, so recomputation is one bounded local
@@ -36,7 +37,7 @@ Key code map (verified against current code):
 
 | Area | Location |
 |---|---|
-| Executable classifier | `ikk-core/src/binary.rs::is_runnable` (single predicate, content-based) |
+| Executable classifier | `ikk-core/src/binary.rs::classify` / `is_command_candidate` (content-based; ELF/Mach-O/PE cross-host) |
 | Recursive discovery | `ikk-core/src/ops.rs::collect_executables` (symlink dirs = leaves) |
 | PATH export filter | `ikk-core/src/ops.rs::is_path_exported` |
 | Linking / collisions / upgrades | `ikk-core/src/ops.rs::link_executables` |

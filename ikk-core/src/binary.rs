@@ -175,16 +175,6 @@ pub fn is_command_candidate(path: &Path) -> bool {
     classify_file(path).is_program()
 }
 
-/// Compatibility wrapper for the old API.
-///
-/// New code should prefer [`is_command_candidate`], since "runnable" can imply
-/// host compatibility or loader semantics that this classifier intentionally
-/// does not attempt to model.
-#[must_use]
-pub fn is_runnable(path: &Path) -> bool {
-    is_command_candidate(path)
-}
-
 // =============================================================================
 // Scripts
 // =============================================================================
