@@ -28,6 +28,7 @@ This document outlines the strategic architectural shifts required to transform 
 | ZIP path containment (2026-08-24) | ✅ done — `processor.rs` uses `ZipFile::enclosed_name()` (Windows-aware) + `starts_with(out_dir)` assert; `safe_join` removed; 5-case traversal matrix + nested-layout regression tests |
 | Atomic store commit + hash validation (2026-08-26) | ✅ done — `store::insert` populates `store/.tmp-{pid}-{n}` then atomically renames into place; store hits read `meta.toml` and self-heal (remove + repopulate) on missing/mismatched `content_sha256`; stale `.tmp-*` dirs swept under the exclusive store lock |
 | Transactional linking (2026-08-26) | ✅ done — `link_executables` validates collisions before mutating `bin/` (plan-then-commit); a failed upgrade leaves the old links intact |
+| Duplicate-basename rejection + `bin` parent filter (2026-08-26) | ✅ done — two files sharing one basename are rejected as ambiguous; `is_path_exported` checks only *parent* `bin` components (a file named `bin` outside `bin/` is not exported) |
 
 ---
 

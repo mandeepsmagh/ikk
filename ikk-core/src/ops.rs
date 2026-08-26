@@ -214,6 +214,14 @@ pub fn link_executables(
             tracing::warn!("skipping {}: resolves outside the store", rel.display());
             continue;
         }
+        // Two files sharing one basename is ambiguous (e.g. `bin/foo` and
+        // `tools/bin/foo`) — reject rather than let read_dir order decide.
+        if let Some(first) = bins.get(exe) {
+            return Err(IkkError::Store(format!(
+                "ambiguous executable name '{exe}': found at both '{first}' and '{}'",
+                rel.display()
+            )));
+        }
         bins.insert(exe.to_string(), rel.to_string_lossy().to_string());
     }
 
@@ -328,15 +336,17 @@ pub fn collect_executables(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 /// `*.so` parser libs and `less.sh` under `lib/`/`share/` — is reachable via
 /// `ikk run` but must not pollute `~/.ikk/bin`.
 fn is_path_exported(rel: &Path) -> bool {
-    let mut comps = rel.components();
-    if comps.next().is_none() {
+    let Some(parent) = rel.parent() else {
         return false;
-    }
+    };
     // Exactly one component → binary sits at the package root.
-    if comps.clone().next().is_none() {
+    if parent.as_os_str().is_empty() {
         return true;
     }
-    rel.components().any(|c| c.as_os_str() == "bin")
+    // Otherwise only a *parent* directory named `bin` qualifies — the
+    // executable's own name must not count (a file named `bin` under
+    // `scripts/` must not be exported).
+    parent.components().any(|c| c.as_os_str() == "bin")
 }
 
 /// Whether the canonical target of `path` resolves inside `root`.
@@ -677,6 +687,58 @@ mod tests {
         assert!(path_present(&home.bin_dir().join("foo")));
         assert!(path_present(&home.bin_dir().join("bar")));
         assert!(path_present(&home.bin_dir().join("baz")));
+
+        let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[test]
+    fn link_executables_rejects_duplicate_basenames() {
+        let (_dir, home, store, lock, _platform) = setup("dupbasename");
+
+        let src = home.root.join("src");
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::create_dir_all(src.join("tools/bin")).unwrap();
+        for dir in ["bin", "tools/bin"] {
+            let p = src.join(dir).join("foo");
+            std::fs::write(&p, b"#!/bin/sh\necho hi").unwrap();
+            make_executable(&p);
+        }
+
+        let artifact =
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+        let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
+
+        let err = link_executables(&home, "pkg", &sp, &lock).unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "unexpected error: {err}");
+
+        let _ = std::fs::remove_dir_all(&home.root);
+    }
+
+    #[test]
+    fn link_executables_skips_file_named_bin_outside_bin_dir() {
+        let (_dir, home, store, lock, _platform) = setup("binname");
+
+        let src = home.root.join("src");
+        std::fs::create_dir_all(src.join("scripts")).unwrap();
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+
+        // A runnable file literally named `bin` under scripts/ must not be
+        // exported just because its own filename is "bin".
+        std::fs::write(src.join("scripts/bin"), b"#!/bin/sh\necho hi").unwrap();
+        make_executable(&src.join("scripts/bin"));
+
+        // Control: a real binary inside bin/ is still exported.
+        let tool = tool_name();
+        std::fs::write(src.join("bin").join(tool), b"#!/bin/sh\necho hi").unwrap();
+        make_executable(&src.join("bin").join(tool));
+
+        let artifact =
+            Artifact { dir: src.clone(), archive_hash: "abc".into(), source_url: "url".into() };
+        let sp = store.insert("pkg", "1.0", None, &artifact).unwrap();
+
+        let linked = link_executables(&home, "pkg", &sp, &lock).unwrap();
+        assert_eq!(linked.bins.keys().cloned().collect::<Vec<_>>(), vec![tool.to_string()]);
+        assert!(!home.bin_dir().join("bin").exists());
 
         let _ = std::fs::remove_dir_all(&home.root);
     }
