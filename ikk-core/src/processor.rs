@@ -148,6 +148,7 @@ fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<PathBuf> {
             let mut f = std::fs::File::create(&out_path)?;
             std::io::copy(&mut file, &mut f)?;
         }
+        apply_unix_mode(&out_path, file.unix_mode());
     }
     Ok(out_dir.to_path_buf())
 }
@@ -210,6 +211,27 @@ pub(crate) fn set_executable(_path: &Path) {
         if let Err(e) = std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o755)) {
             tracing::warn!("failed to set executable permissions on {}: {e}", _path.display());
         }
+    }
+}
+
+/// Preserve the unix permission bits (low 9) a ZIP entry records, when present.
+///
+/// PATH export is content-based, so it never depends on these bits, but
+/// preserving them keeps extracted trees faithful to the author's intent.
+fn apply_unix_mode(path: &Path, mode: Option<u32>) {
+    #[cfg(unix)]
+    {
+        let Some(mode) = mode else { return };
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o777))
+        {
+            tracing::warn!("failed to set permissions on {}: {e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
     }
 }
 
@@ -365,6 +387,34 @@ mod tests {
         extract_zip_to_dir(&bytes, &out).unwrap();
         assert!(out.join("bin/tool").exists());
         assert!(out.join("lib/tool.so").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_extraction_preserves_unix_mode() {
+        use std::io::{Cursor, Write};
+        use std::os::unix::fs::PermissionsExt;
+        use zip::ZipWriter;
+        use zip::write::SimpleFileOptions;
+
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        writer
+            .start_file("bin/tool", SimpleFileOptions::default().unix_permissions(0o755))
+            .unwrap();
+        writer.write_all(b"#!/bin/sh\necho hi").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let dir = temp_dir("zipmode");
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        extract_zip_to_dir(&bytes, &out).unwrap();
+
+        let mode = std::fs::metadata(out.join("bin/tool")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
