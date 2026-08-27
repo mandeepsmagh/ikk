@@ -122,6 +122,7 @@ fn list_binaries_inner(root: &std::path::Path, dir: &std::path::Path, names: &mu
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[cfg(unix)]
