@@ -224,9 +224,7 @@ Each item: own commit, tests per brief's deliverable format, run fmt/clippy/test
 
 ### Environment notes
 
-- Reviewed on Windows host; unix-only behavior (symlink containment, Mach-O/ELF
-  classifier branches, exec bits) is test-covered via synthetic headers but must be
-  re-verified on real Linux/macOS machines before release.
+- Real-machine verification: ✅ Linux (Ubuntu/WSL2 — real `ikk install` of neovim) and ✅ macOS (dev host). ⏳ Windows (Developer Mode symlinks) still pending. Reviewed on a Windows host; unix-only behavior (symlink containment, Mach-O/ELF classifier branches, exec bits) is test-covered via synthetic headers, but Windows-native behavior needs a real Windows install before the next release.
 - `zip` crate 8.6.0 confirmed in Cargo.lock with `enclosed_name()` and `unix_mode()`.
 
 ---
