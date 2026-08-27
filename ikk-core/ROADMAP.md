@@ -39,6 +39,33 @@ This document outlines the strategic architectural shifts required to transform 
 
 ---
 
+## Near-term direction (post-0.10.0)
+
+The north star is `VISION.md` (repo root) — "minimal core, composable tooling":
+`Target → Resolution → CAS → Projection → Consumer`. A compass, not a checklist.
+In order:
+
+1. **`--target <os>/<arch>`** — make the resolution target explicit. The hooks
+   already exist: `Platform` threads through `score_asset` (asset selection) and
+   `is_host_native` (exposure filter). Cross-target installs *store* the asset in
+   the CAS but never link into host-native `~/.ikk/bin`; the lock records such
+   packages with an empty `bins` set. Unlocks cross-target caching for
+   containers/CI later.
+2. **`ikk exec --with <tool> -- <cmd>`** — the first non-global primitive:
+   resolve + store + ephemeral projection + run, composing existing pieces.
+   Unblocks agents, scripts, and CI without a project-environment subsystem.
+3. **`ikk shell` / project views** — only after `ikk exec`, and only if project
+   environments demand it (a `~/.ikk/views/<hash>/bin` projection).
+
+**Guardrail:** do not crystallize `Resolution`/`Projection`/`Consumer` as types
+before a second consumer exists — keep `fetch/resolve/store/lock/materialize/
+execute` as functions until `ikk exec` proves the shape. Build the `bin/`
+projection once (reusable); do not build a generic projection engine. No
+`abi`/`libc` in `Target` v1. Remote cache, containers, microVMs, agents, and
+editors wait for a real consumer to pull them in.
+
+---
+
 ## 1. Architectural Simplification (The "Minimalist Engine" Principle)
 
 An S-Tier core must be a "dumb" but extremely fast engine. Currently, too much "decision making" is happening in the orchestration layer.
