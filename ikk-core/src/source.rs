@@ -34,7 +34,7 @@ pub struct Artifact {
 /// `Bytes` is a downloaded archive or raw binary; `Directory` points at a
 /// local directory that is already the package root.
 pub enum RawContent {
-    Bytes { bytes: Vec<u8>, filename: String },
+    Bytes { bytes: Vec<u8>, filename: String, source: String },
     Directory { path: PathBuf },
 }
 
@@ -45,10 +45,10 @@ impl RawContent {
     /// — sources never do it themselves.
     pub async fn process(self, stage_dir: &Path) -> Result<Artifact> {
         match self {
-            Self::Bytes { bytes, filename } => {
+            Self::Bytes { bytes, filename, source } => {
                 let archive_hash = crate::store::sha256_hex(&bytes);
                 let dir = crate::processor::extract_dir(&bytes, &filename, stage_dir)?;
-                Ok(Artifact { dir, archive_hash, source_url: filename })
+                Ok(Artifact { dir, archive_hash, source_url: source })
             }
             Self::Directory { path } => Ok(Artifact {
                 dir: path.clone(),
@@ -149,7 +149,7 @@ impl Source for RemoteSource {
         )
         .await?;
 
-        Ok(RawContent::Bytes { bytes, filename: asset.name.clone() })
+        Ok(RawContent::Bytes { bytes, filename: asset.name.clone(), source: asset.url.clone() })
     }
 }
 
@@ -191,7 +191,7 @@ impl Source for UrlSource {
 
         let filename = url.rsplit('/').next().unwrap_or("download").to_string();
 
-        Ok(RawContent::Bytes { bytes, filename })
+        Ok(RawContent::Bytes { bytes, filename, source: url })
     }
 }
 
@@ -234,7 +234,7 @@ impl Source for LocalSource {
         let filename =
             self.path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_string();
 
-        Ok(RawContent::Bytes { bytes, filename })
+        Ok(RawContent::Bytes { bytes, filename, source: self.path.display().to_string() })
     }
 }
 

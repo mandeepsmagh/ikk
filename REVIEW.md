@@ -198,7 +198,9 @@ No signing infrastructure.
   `bin_entry` is a *persisted* lock field (needs serde alias/migration). Do last, only
   if desired.
 
-### Implementation plan (agreed order)
+### Implementation plan (agreed order) — STATUS: COMPLETE (2026-08-26)
+
+All P0, P1, P2, and deferred items below are done and committed. Remaining follow-ups (not part of this plan): release **0.10.0** (the store-identity change), Windows real-machine verification, and the deferred features recorded in the decision sections above.
 
 **P0 — safety boundaries**
 1. Stage 3: symlink containment at export time (`ops.rs` + `run.rs`, 5-test matrix).
@@ -213,7 +215,7 @@ No signing infrastructure.
 
 **P2 — robustness/cleanup**
 8. Stage 8.2: streaming file hashing (behavior-preserving).
-9. Stage 9: fix stale doc comment + separators; state non-goal.
+9. Stage 9: stale doc comment fixed + non-goal stated; length-prefix separators **skipped** (would hard-break existing `tree_root` on load, for negligible benefit — the concatenated format is practically safe and the digest is unkeyed anyway).
 10. Stage 11: `./`/`../` local paths; `source_url` naming.
 
 **Deferred (DONE — decided 2026-08-26)**

@@ -32,6 +32,10 @@ This document outlines the strategic architectural shifts required to transform 
 | Host-native `.ikk/bin` filter (2026-08-26) | ✅ done — `link_executables` takes an explicit `Platform` and links only binaries native to it (`is_host_native`: OS-format match + strict arch; universal + scripts always); CAS keeps everything, `ikk run` still reaches cross binaries; 4.3/4.4 were already done by classifier v2 |
 | ZIP `unix_mode` preservation (2026-08-26) | ✅ done — `extract_zip_to_dir` applies `unix_mode() & 0o777` per entry on unix; synthetic zip test asserts `0755` |
 | Mode bits in tree hash + renames (2026-08-26) | ✅ done — `hash_dir` folds exec bits (`mode & 0o111`, unix) into file hashes (invalidates all store identities); `PACKAGE_DIR = "bin"` → `CONTENT_DIR = "content"`; lock field `bin_entry` → `entry_name` with `bin_entry` serde alias (lock digest unchanged) |
+| Streaming file hashing — 8.2 (2026-08-26) | ✅ done — `sha256_hex_file` streams the file digest in 64 KiB chunks (behavior-preserving); multi-GB packages no longer force whole files into memory |
+| Lock integrity non-goal — 9 (2026-08-26) | ✅ done — `tree_root` doc states it detects *accidental* corruption only (unkeyed, no signing); length-prefix separators skipped (hard-breaks existing `tree_root` for negligible benefit) |
+| Local `./`/`../` paths + real `source_url` — 11 (2026-08-26) | ✅ done — `is_local_uri` treats `./`/`../`/`.`/`..` as local; `RawContent::Bytes` carries the real download URL (not just the filename) into `meta.toml`'s `source_url` |
+| **Staged hardening complete** (2026-08-26) | ✅ all P0+P1+P2+deferred items done — see REVIEW.md. Next: release **0.10.0** (store-identity change; existing installs self-heal + `ikk gc`), then Windows real-machine verification |
 
 ---
 

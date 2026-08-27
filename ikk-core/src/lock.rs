@@ -8,9 +8,14 @@ use crate::error::{IkkError, Result};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LockFile {
     /// Integrity digest over all package entries — detects tampering.
-    /// A sorted hash list (degenerate single-level Merkle tree): each leaf
-    /// is sha256(name + version + uri + sha256 + entry_name + variant + bins),
+    ///
+    /// A sorted hash list (degenerate single-level Merkle tree): each leaf is
+    /// sha256(name + version + uri + sha256 + entry_name + variant + bins),
     /// the root is sha256(sorted leaves).
+    ///
+    /// This detects *accidental* corruption and unsynchronized edits. It is
+    /// unkeyed — a malicious local actor who edits both the contents and this
+    /// root is not detected, and there is deliberately no signing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree_root: Option<String>,
 

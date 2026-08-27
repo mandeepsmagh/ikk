@@ -171,6 +171,10 @@ fn is_local_uri(uri: &str) -> bool {
     uri.starts_with("file://")
         || uri.starts_with('/')
         || uri.starts_with("~/")
+        || uri.starts_with("./")
+        || uri.starts_with("../")
+        || uri == "."
+        || uri == ".."
         || Path::new(uri).is_absolute()
 }
 
@@ -401,6 +405,27 @@ mod tests {
         };
 
         assert_eq!(config.package_mode(&pkg), PackageMode::Local);
+    }
+
+    #[test]
+    fn package_mode_local_relative_paths() {
+        let config = Config::default();
+
+        for uri in ["./mytool", "../mytool", ".", ".."] {
+            let pkg = PackageConfig {
+                uri: uri.into(),
+                version: None,
+                variant: None,
+                build: None,
+                sha256: None,
+            };
+
+            assert_eq!(
+                config.package_mode(&pkg),
+                PackageMode::Local,
+                "uri '{uri}' should be classified local"
+            );
+        }
     }
 
     #[test]

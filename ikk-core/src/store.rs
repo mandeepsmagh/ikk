@@ -288,6 +288,26 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// SHA-256 hex of a file's contents, streamed in fixed-size chunks so a
+/// multi-GB package never forces the whole file into memory at once.
+fn sha256_hex_file(path: &Path) -> Result<String> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+
+    Ok(hex::encode(hasher.finalize()))
+}
+
 /// Compute a deterministic hash of a directory's contents.
 /// Symlinks are hashed by their target, not followed (prevents
 /// non-reproducible hashes across machines).
@@ -309,8 +329,7 @@ fn hash_dir(dir: &Path) -> Result<String> {
         } else if meta.is_dir() {
             hasher.update(hash_dir(path)?.as_bytes());
         } else {
-            let bytes = std::fs::read(path)?;
-            hasher.update(sha256_hex(&bytes).as_bytes());
+            hasher.update(sha256_hex_file(path)?.as_bytes());
             // Exec bits distinguish a runnable from a non-runnable file; fold
             // them into the identity so a mode change is detected and two
             // otherwise-identical files don't hash the same.
@@ -446,6 +465,22 @@ mod tests {
             sha256_hex(b"hello"),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
+    }
+
+    #[test]
+    fn sha256_hex_file_streams_large_file() {
+        let tmp = std::env::temp_dir().join(format!("ikk_test_stream_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let f = tmp.join("big");
+        // Larger than the 64 KiB read buffer so the loop runs more than once.
+        let data = vec![0xABu8; 128 * 1024];
+        std::fs::write(&f, &data).unwrap();
+
+        assert_eq!(sha256_hex_file(&f).unwrap(), sha256_hex(&data));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
