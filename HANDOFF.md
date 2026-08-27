@@ -2,7 +2,7 @@
 
 ## Status
 
-- **v0.9.0** (latest tag). Full staged hardening (P0+P1+P2+deferred) complete on `main`; 0.10.0 release pending (see Next).
+- **v0.10.0** (latest tag). Full staged hardening (P0+P1+P2+deferred) shipped; store-identity change (exec-bit hash + `content/` rename) released.
 - **P0 item 1 (symlink containment) DONE** — `ops::is_within_root` filters escaping symlink executables at PATH-export and `ikk run`; 5-case matrix test added.
 - **P0 item 2 (ZIP path containment) DONE** — `processor.rs` now uses `ZipFile::enclosed_name()` (Windows-aware) + a `starts_with(out_dir)` assert; `safe_join` removed. 5-case traversal test matrix + nested-layout regression test.
 - **P0 item 3 (atomic store commit + hash validation) DONE** — `store::insert` now populates a `store/.tmp-{pid}-{counter}` dir and atomically `rename`s it into place; on a store hit it reads `meta.toml` and self-heals (remove + repopulate) on missing/mismatched `content_sha256`. Stale `.tmp-*` dirs are swept under the exclusive store lock. 3 new tests (partial-entry self-heal, hash-mismatch self-heal, temp-dir sweep).
@@ -17,9 +17,9 @@
 
 ## Next
 
-1. **Release 0.10.0** when ready — the store-identity change (exec-bit hash + `content/` rename) is on `main` but unreleased; existing installs recover via self-heal + `ikk gc` (see migration note below).
-2. **Windows real-machine verification** — PE classification, symlinks, and the native `.ikk/bin` filter are synthetic-tested but want a real Windows install before the next release.
-3. Deferred features (recorded in REVIEW.md): `--target` cross-platform install; classification persistence (only as an in-memory pass-through if the install-time double-read ever matters).
+1. **Windows real-machine verification** — PE classification, symlinks, and the native `.ikk/bin` filter are synthetic-tested but want a real Windows install before the next release.
+2. **Near-term direction (see ROADMAP.md):** `--target` → `ikk exec` → `ikk shell`/project views, under the VISION.md guardrails.
+3. Deferred: classification persistence (only as an in-memory pass-through if the install-time double-read ever matters).
 
 ## Gotchas / decisions needed
 
