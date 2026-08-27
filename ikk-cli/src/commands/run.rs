@@ -59,6 +59,13 @@ pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
     Ok(())
 }
 
+/// True if `path` is a directory that is not a symlink. Symlinked directories
+/// are treated as leaves (not followed), so a `bin/loop -> ..` cycle can never
+/// recurse forever — matching `collect_executables`.
+fn is_real_dir(path: &std::path::Path) -> bool {
+    path.symlink_metadata().is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+}
+
 fn find_binary(
     root: &std::path::Path,
     dir: &std::path::Path,
@@ -70,7 +77,7 @@ fn find_binary(
 
     for entry in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.is_dir() {
+        if is_real_dir(&path) {
             if let Some(found) = find_binary(root, &path, name) {
                 return Some(found);
             }
@@ -104,11 +111,34 @@ fn list_binaries_inner(root: &std::path::Path, dir: &std::path::Path, names: &mu
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if path.is_dir() {
+            if is_real_dir(&path) {
                 list_binaries_inner(root, &path, names);
             } else if ikk_core::binary::is_command_candidate(&path) && is_within_root(&path, root) {
                 names.push(format!("  {}", path.display()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn find_binary_does_not_recurse_into_symlink_dir_cycle() {
+        let dir = std::env::temp_dir().join(format!("ikk_run_cycle_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin/tool"), b"#!/bin/sh\necho hi").unwrap();
+        // `loop -> ..` makes bin/ self-referential; walking it naively recurses forever.
+        std::os::unix::fs::symlink("..", dir.join("bin/loop")).unwrap();
+
+        // Must terminate and find nothing through the cycle.
+        assert!(find_binary(&dir, &dir, "nonexistent").is_none());
+        // The real binary is still found.
+        assert_eq!(find_binary(&dir, &dir, "tool"), Some(dir.join("bin/tool")));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
