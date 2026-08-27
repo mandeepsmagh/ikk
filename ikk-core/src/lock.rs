@@ -9,7 +9,7 @@ use crate::error::{IkkError, Result};
 pub struct LockFile {
     /// Integrity digest over all package entries — detects tampering.
     /// A sorted hash list (degenerate single-level Merkle tree): each leaf
-    /// is sha256(name + version + uri + sha256 + bin_entry + variant),
+    /// is sha256(name + version + uri + sha256 + entry_name + variant + bins),
     /// the root is sha256(sorted leaves).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tree_root: Option<String>,
@@ -35,7 +35,8 @@ pub struct LockedPackage {
     pub sha256: String,
 
     /// Content-addressed store entry name — `{hash12}-{name}-{version}`.
-    pub bin_entry: String,
+    #[serde(alias = "bin_entry")]
+    pub entry_name: String,
 
     /// Executables linked into `~/.ikk/bin/` — binary name → path relative
     /// to the package root inside the store entry. Sorted (BTreeMap) so the
@@ -131,7 +132,7 @@ impl LockFile {
     ///
     /// Each leaf hashes:
     ///
-    /// name + version + uri + sha256 + bin_entry + variant
+    /// name + version + uri + sha256 + entry_name + variant + bins
     #[must_use]
     pub fn compute_root(&self) -> String {
         let mut leaves: Vec<String> = self
@@ -144,7 +145,7 @@ impl LockFile {
                 h.update(pkg.version.as_bytes());
                 h.update(pkg.uri.as_bytes());
                 h.update(pkg.sha256.as_bytes());
-                h.update(pkg.bin_entry.as_bytes());
+                h.update(pkg.entry_name.as_bytes());
 
                 if let Some(variant) = &pkg.variant {
                     h.update(variant.as_bytes());
@@ -197,7 +198,7 @@ mod tests {
             variant: None,
             uri: uri.into(),
             sha256: hash.into(),
-            bin_entry: format!("{}-foo-{}", &padded[..12], version),
+            entry_name: format!("{}-foo-{}", &padded[..12], version),
             bins: std::collections::BTreeMap::new(),
             link_type: "link".into(),
             installed_at: 1_700_000_000,
@@ -273,5 +274,17 @@ mod tests {
         lock.tree_root = Some("deadbeef".into());
 
         assert!(matches!(lock.verify(), Err(IkkError::HashMismatch { .. })));
+    }
+
+    #[test]
+    fn deserializes_legacy_bin_entry_field() {
+        let toml = r#"
+version = "1.0"
+uri = "https://example.com"
+bin_entry = "abcdef123456-foo-1.0"
+installed_at = 1
+"#;
+        let pkg: LockedPackage = toml::from_str(toml).unwrap();
+        assert_eq!(pkg.entry_name, "abcdef123456-foo-1.0");
     }
 }

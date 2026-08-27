@@ -58,7 +58,7 @@ async fn pinned_version() {
     let locked = lock.get("ripgrep").unwrap();
     assert_eq!(locked.version, "14.1.1");
     assert!(!locked.sha256.is_empty());
-    assert!(!locked.bin_entry.is_empty());
+    assert!(!locked.entry_name.is_empty());
 
     // bin/rg → the store binary, symlinked flat for PATH
     let linked = home.bin_dir().join("rg");

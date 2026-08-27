@@ -288,7 +288,7 @@ mod tests {
             variant: None,
             uri: "BurntSushi/ripgrep".into(),
             sha256: "abc".into(),
-            bin_entry: "abcdef123456-ripgrep-14.1.1".into(),
+            entry_name: "abcdef123456-ripgrep-14.1.1".into(),
             bins: Default::default(),
             link_type: "link".into(),
             installed_at: 0,

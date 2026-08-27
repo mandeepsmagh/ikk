@@ -30,7 +30,7 @@ pub fn run(args: RunArgs, home: &IkkHome) -> Result<()> {
 
     // The package root lives in the content-addressed store; executables are
     // symlinked into bin/ for PATH, but the root is the full package tree.
-    let pkg_dir = ctx.store.package_root(&locked.bin_entry);
+    let pkg_dir = ctx.store.package_root(&locked.entry_name);
     if !pkg_dir.exists() {
         anyhow::bail!("package directory {} not found — run 'ikk sync'", pkg_dir.display());
     }

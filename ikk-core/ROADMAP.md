@@ -31,6 +31,7 @@ This document outlines the strategic architectural shifts required to transform 
 | Duplicate-basename rejection + `bin` parent filter (2026-08-26) | ✅ done — two files sharing one basename are rejected as ambiguous; `is_path_exported` checks only *parent* `bin` components (a file named `bin` outside `bin/` is not exported) |
 | Host-native `.ikk/bin` filter (2026-08-26) | ✅ done — `link_executables` takes an explicit `Platform` and links only binaries native to it (`is_host_native`: OS-format match + strict arch; universal + scripts always); CAS keeps everything, `ikk run` still reaches cross binaries; 4.3/4.4 were already done by classifier v2 |
 | ZIP `unix_mode` preservation (2026-08-26) | ✅ done — `extract_zip_to_dir` applies `unix_mode() & 0o777` per entry on unix; synthetic zip test asserts `0755` |
+| Mode bits in tree hash + renames (2026-08-26) | ✅ done — `hash_dir` folds exec bits (`mode & 0o111`, unix) into file hashes (invalidates all store identities); `PACKAGE_DIR = "bin"` → `CONTENT_DIR = "content"`; lock field `bin_entry` → `entry_name` with `bin_entry` serde alias (lock digest unchanged) |
 
 ---
 

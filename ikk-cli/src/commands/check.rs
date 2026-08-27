@@ -45,7 +45,7 @@ pub fn run(home: &IkkHome) -> Result<()> {
     // Verify each linked executable still points at its store binary.
     let mut link_errors: Vec<String> = Vec::new();
     for (name, locked) in &ctx.lock.packages {
-        let pkg_root = ctx.store.package_root(&locked.bin_entry);
+        let pkg_root = ctx.store.package_root(&locked.entry_name);
         for exe in locked.bins.keys() {
             let link = home.bin_dir().join(exe);
             let target = pkg_root.join(&locked.bins[exe]);

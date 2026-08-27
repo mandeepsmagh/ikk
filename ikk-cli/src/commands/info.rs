@@ -35,7 +35,7 @@ pub fn run(args: InfoArgs, home: &IkkHome) -> Result<()> {
         println!("  url:      {}", locked.uri);
         println!("  sha256:   {}", locked.sha256);
         println!("  link:     {}", locked.link_type);
-        println!("  entry:    {}", locked.bin_entry);
+        println!("  entry:    {}", locked.entry_name);
         if !locked.bins.is_empty() {
             let names = locked.bins.keys().cloned().collect::<Vec<_>>().join(", ");
             println!("  binaries: {names}");

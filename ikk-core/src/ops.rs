@@ -125,7 +125,7 @@ async fn install_from_source<'a>(
             variant: req.pkg.variant.clone(),
             uri: req.pkg.uri.clone(),
             sha256: artifact.archive_hash.clone(),
-            bin_entry: sp.entry_name.clone(),
+            entry_name: sp.entry_name.clone(),
             bins: linked.bins,
             link_type: linked.link_type,
             installed_at: crate::lock::unix_now(),
@@ -470,7 +470,7 @@ pub fn remove(name: &str, home: &IkkHome, store: &Store, lock: &mut LockFile) ->
         }
 
         // Remove store entry
-        store.remove_by_entry(&locked.bin_entry)?;
+        store.remove_by_entry(&locked.entry_name)?;
     }
 
     // Remove lock entry
@@ -567,7 +567,7 @@ mod tests {
                 variant: None,
                 uri: "url".into(),
                 sha256: "abc".into(),
-                bin_entry: sp.entry_name.clone(),
+                entry_name: sp.entry_name.clone(),
                 bins: linked.bins,
                 link_type: linked.link_type,
                 installed_at: 0,
@@ -640,7 +640,7 @@ mod tests {
                 variant: None,
                 uri: "url".into(),
                 sha256: "abc".into(),
-                bin_entry: sp.entry_name.clone(),
+                entry_name: sp.entry_name.clone(),
                 bins: linked.bins,
                 link_type: linked.link_type,
                 installed_at: 0,
@@ -681,7 +681,7 @@ mod tests {
                 variant: None,
                 uri: "url".into(),
                 sha256: "v1".into(),
-                bin_entry: sp_v1.entry_name.clone(),
+                entry_name: sp_v1.entry_name.clone(),
                 bins: linked.bins,
                 link_type: linked.link_type,
                 installed_at: 0,
@@ -704,7 +704,7 @@ mod tests {
                 variant: None,
                 uri: "url".into(),
                 sha256: "two".into(),
-                bin_entry: sp_two.entry_name.clone(),
+                entry_name: sp_two.entry_name.clone(),
                 bins: linked_two.bins,
                 link_type: linked_two.link_type,
                 installed_at: 0,
@@ -841,7 +841,7 @@ mod tests {
                 variant: None,
                 uri: "url".into(),
                 sha256: "abc".into(),
-                bin_entry: sp.entry_name.clone(),
+                entry_name: sp.entry_name.clone(),
                 bins: linked.bins,
                 link_type: linked.link_type,
                 installed_at: 0,

@@ -216,9 +216,9 @@ No signing infrastructure.
 9. Stage 9: fix stale doc comment + separators; state non-goal.
 10. Stage 11: `./`/`../` local paths; `source_url` naming.
 
-**Deferred (need explicit decision first)**
-- Stage 8.1: mode bits in tree hash — invalidates all store identities.
-- Stage 10: renames (`PACKAGE_DIR`, `bin_entry`) — persisted names, need migration.
+**Deferred (DONE — decided 2026-08-26)**
+- Stage 8.1: mode bits in tree hash — done (`mode & 0o111` for regular files, unix-only). Invalidates all store identities; no hash-version field (one-time `ikk check` false-alarm + self-heal on reinstall).
+- Stage 10: renames — done (`PACKAGE_DIR = "bin"` → `CONTENT_DIR = "content"`; lock field `bin_entry` → `entry_name` with `bin_entry` serde alias; lock digest unchanged).
 
 Each item: own commit, tests per brief's deliverable format, run fmt/clippy/tests after.
 

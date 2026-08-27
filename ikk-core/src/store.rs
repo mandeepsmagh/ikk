@@ -10,11 +10,9 @@ pub struct Store {
     root: PathBuf,
 }
 
-/// Directory inside each store entry that holds the package root.
-///
-/// Historically named `bin`, but it is the whole package tree — not just the
-/// executables, which may live anywhere within it (e.g. neovim ships `bin/nvim`).
-const PACKAGE_DIR: &str = "bin";
+/// Directory inside each store entry that holds the package root — the whole
+/// package tree, not just executables.
+const CONTENT_DIR: &str = "content";
 
 /// Exclusive store lock — released on drop.
 pub struct StoreLock {
@@ -35,7 +33,7 @@ pub struct StorePath {
     pub entry_name: String,
     /// Path to the entry directory.
     pub path: PathBuf,
-    /// Package root inside the entry: `{path}/{PACKAGE_DIR}`.
+    /// Package root inside the entry: `{path}/{CONTENT_DIR}`.
     pub root: PathBuf,
 }
 
@@ -93,10 +91,10 @@ impl Store {
     }
 
     /// Package root inside a store entry, given the entry's directory name
-    /// (the `bin_entry` recorded in ikk.lock).
+    /// (the `entry_name` recorded in ikk.lock).
     #[must_use]
     pub fn package_root(&self, entry_name: &str) -> PathBuf {
-        self.root.join(entry_name).join(PACKAGE_DIR)
+        self.root.join(entry_name).join(CONTENT_DIR)
     }
 
     /// Insert an artifact as a content-addressed entry. Idempotent — skips if
@@ -173,7 +171,7 @@ impl Store {
             version: version.to_string(),
             variant: variant.map(String::from),
             entry_name,
-            root: entry.join(PACKAGE_DIR),
+            root: entry.join(CONTENT_DIR),
             path: entry,
         }
     }
@@ -254,7 +252,7 @@ impl Store {
             let meta: StoreMeta = toml::from_str(&std::fs::read_to_string(&meta_path)?)
                 .map_err(|e| IkkError::Toml(format!("meta.toml: {e}")))?;
 
-            let root = entry.path().join(PACKAGE_DIR);
+            let root = entry.path().join(CONTENT_DIR);
             if !root.exists() {
                 results.push(VerifyResult::Missing(meta.name));
                 continue;
@@ -313,6 +311,14 @@ fn hash_dir(dir: &Path) -> Result<String> {
         } else {
             let bytes = std::fs::read(path)?;
             hasher.update(sha256_hex(&bytes).as_bytes());
+            // Exec bits distinguish a runnable from a non-runnable file; fold
+            // them into the identity so a mode change is detected and two
+            // otherwise-identical files don't hash the same.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                hasher.update(format!(":{:03o}", meta.permissions().mode() & 0o111).as_bytes());
+            }
         }
     }
     Ok(hex::encode(hasher.finalize()))
@@ -394,7 +400,7 @@ fn is_valid_hit(entry: &Path, content_hash: &str) -> bool {
     meta.content_sha256 == content_hash
 }
 
-/// Copy the artifact into `dir` (under `PACKAGE_DIR`) and write `meta.toml`.
+/// Copy the artifact into `dir` (under `CONTENT_DIR`) and write `meta.toml`.
 ///
 /// `dir` is a fresh temp dir; the caller atomically renames it into place on
 /// success and removes it on failure.
@@ -406,7 +412,7 @@ fn populate(
     artifact: &Artifact,
     content_hash: &str,
 ) -> Result<()> {
-    let root = dir.join(PACKAGE_DIR);
+    let root = dir.join(CONTENT_DIR);
     copy_dir_contents(&artifact.dir, &root)?;
 
     let meta = StoreMeta {
@@ -625,6 +631,34 @@ mod tests {
         assert!(!stale.exists());
         assert!(real.exists());
         assert!(store.root().join(".lock").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hash_dir_distinguishes_exec_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = std::env::temp_dir().join(format!("ikk_test_mode_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let a = tmp.join("a");
+        let b = tmp.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("foo"), b"same bytes").unwrap();
+        std::fs::write(b.join("foo"), b"same bytes").unwrap();
+        std::fs::set_permissions(a.join("foo"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(b.join("foo"), std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let ha = hash_dir(&a).unwrap();
+        let hb = hash_dir(&b).unwrap();
+        assert_ne!(ha, hb, "exec-bit difference must change the tree hash");
+
+        // Same bytes + same mode → identical hash.
+        std::fs::set_permissions(b.join("foo"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(ha, hash_dir(&b).unwrap());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
